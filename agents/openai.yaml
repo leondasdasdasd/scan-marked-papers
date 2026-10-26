@@ -1,0 +1,6 @@
+interface:
+  display_name: "已批改试卷扫描入库"
+  short_description: "接口优先完成试卷上传、错题预切与计算题拆分，支持同步检查或同步后返回链接"
+  default_prompt: "使用 $scan-marked-papers 处理我提供的已批改试卷，独立计算式逐题拆分，按我要求完成同步检查或实际同步并给出真实链接。"
+policy:
+  allow_implicit_invocation: true
