@@ -1,6 +1,6 @@
 interface:
-  display_name: "已批改试卷扫描入库"
-  short_description: "接口优先完成试卷上传、错题预切与计算题拆分，支持同步检查或同步后返回链接"
-  default_prompt: "使用 $scan-marked-papers 处理我提供的已批改试卷，独立计算式逐题拆分，按我要求完成同步检查或实际同步并给出真实链接。"
+  display_name: "试卷批改与扫描整理"
+  short_description: "新卷批改或接手已有记录，计算题逐题拆分，默认检查后交付，深度复核另选"
+  default_prompt: "使用 $scan-marked-papers 处理我提供的新试卷或已有记录链接，按实际阶段续做批改或扫描整理，独立计算式逐题拆分，优先统计准确、题目准确与参考图核验，首轮完成同步检查后立即给我链接和验证边界；全量深审由我另选，只有本次明确要求同步才提交课堂。"
 policy:
   allow_implicit_invocation: true
