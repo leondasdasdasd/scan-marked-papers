@@ -1,10 +1,10 @@
 # scan-marked-papers
 
-试卷批改、扫描与整理技能，当前版本 v1.3.0。支持新卷快速批改、智能批改、已批试卷扫描，以及从已有记录链接接手未完成的工作。接口优先，浏览器补足。
+试卷批改、扫描与整理技能，当前版本 v1.3.2。支持新卷快速批改、智能批改、已批试卷扫描，以及从已有记录链接接手未完成的工作。接口优先，浏览器补足。
 
 默认完成同步检查后交付批阅台链接，不提交课堂；全量准确性深审由用户另选。计算题逐题拆分，优先统计、题目内容与参考图质量，学生个人图按实际风险处理。
 
-下载 [安装包](scan-marked-papers.zip)，解压至 `~/.codex/skills/`，保留 `scan-marked-papers/` 目录。也可从 [Release](https://github.com/leondasdasdasd/scan-marked-papers/releases/latest) 下载。其他智能体可读取 [SKILL.md](SKILL.md) 及其引用文件使用。
+下载 [安装包](scan-marked-papers.zip)，解压至 `~/.codex/skills/`，保留 `scan-marked-papers/` 目录。技能更新说明见 [skill-update.md](references/skill-update.md)。需要更新时先检查版本，用户明确要求后再安装。也可从 [Release](https://github.com/leondasdasdasd/scan-marked-papers/releases/latest) 下载。其他智能体可读取 [SKILL.md](SKILL.md) 及其引用文件使用。
 
 需要自己的批阅台账号和对应学校、课程、班级权限。仓库不含凭证、试卷或学生数据。
 

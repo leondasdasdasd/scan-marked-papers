@@ -54,7 +54,7 @@
 
 - **scan 与 xueersi/doubao**：当前 `organizer_flow.enabled` 为 true。快速批改先完成**全批**批改，再按主文高正确率规则选本批 reference_student_id，`POST B/analysis` body `{reference_student_id}`。已有 draft 沿用原参考卷；后续 frame/catalog 及新版范围确认按 api.md。学生整理应利用供应商批改来源和人工结果，不重新推翻原批改。
 - **LLM grading**：当前不走统一 organizer；`POST B/lesson-practice/prepare-analysis` **不需要 body**。内部 prepare 复用有效 completed/partial snapshot，已有分析 job 返回现状；需要时触发分析并准备媒体。该路由不读取 reference_student_id，不能向它传这个字段声称选了参考卷；LLM 不强行套扫描“必须选参考卷”的步骤。直接 `POST B/analysis` 在此分支可能 409“请点击同步，按需准备分析”，应走上述准备入口，不切 mode 绕过。
-- prepare-analysis 会依据 config selected_paper_ids 与名单关联筛选来源；返回成功不证明授权全批已涵盖。核对 B.students、roster assignments、配置所选范围、snapshot 学生与失败/未完成项，缺关联先修身份，不把自动筛出的 subset 当全批完成。
+- prepare-analysis 会依据 config selected_paper_ids 与名单关联筛选来源；返回成功不证明授权全批已涵盖。核对 B.students、roster assignments、配置所选范围、snapshot 学生与失败/未完成项，身份已有明确证据时补关联；姓名看不清则保留未关联、不反复识别或追问，继续实际允许的其余工作，报告未覆盖试卷与数量，不把自动筛出的 subset 当全批完成，也不为通过检查改选范围。
 - 非 scan 且分析已 completed/partial、不 stale，有 page_errors 时，可 `POST B/analysis/retry-incomplete` **无 body**，仅重试页面失败的学生整理，复用成功页面；它不是批改重试。scan 用现有 scan retry 路由。没有相应失败会 409，无需强行重试。
 - `PATCH B/analysis/mode` body `{analysis_fast:boolean}` 仅非 LLM 快速批改可用；改变会清题框缓存/准备进度、将分析变为 not_generated 并保留旧快照。不是恢复按钮，不为更快或接手任务擅切，不与 scan_fast 混用。
 - reference_preparation、recovery_action、retryable、user_stopped、recovery_wait 等按真实响应处理；有自动恢复安排时观察原任务，明确停止的任务，只有本次“继续做”等恢复要求才按真实继续入口恢复；只读请求保持停止。源码有 `POST B/analysis` 的 `{resume_reference_answers:true}` 分支用于已完成整理后的参考答案补齐，但只在该阶段、该平台实际提供且需此恢复时使用，不作为全部中断任务的万能恢复。
