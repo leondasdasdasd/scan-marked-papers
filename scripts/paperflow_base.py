@@ -24,7 +24,10 @@ JS = r"""async (input) => {
   const B = '/api/batches/' + input.batch;
   let batchPaperIds=[];
   const cleanCheck = d => ({ready:d.ready===true,status:d.status,counts:d.counts,
-    issues:(d.issues||[]).map(x=>({code:x.code,severity:x.severity})),source_version:d.source_version});
+    issues:(d.issues||[]).map(x=>({code:x.code,severity:x.severity,
+      ...(x.paper_id?{paper_id:x.paper_id}:{}),...(x.question_id?{question_id:x.question_id}:{}),
+      ...(x.question_label?{question_label:x.question_label}:{}),...(x.id?{id:x.id}:{}),
+      ...(x.message?{message:String(x.message).slice(0,500)}:{}),...(x.action?{action:x.action}:{})})),source_version:d.source_version});
   const compact = d => ({id:d.id,status:d.status,stage:d.stage,scan_phase:d.scan_phase,
     revision:d.revision,
     frame_revision:d.frame_revision,catalog_revision:d.catalog_revision,
@@ -76,7 +79,7 @@ JS = r"""async (input) => {
   try {
     let result;
     if(input.action==='inspect') result=await inspect();
-    else if(input.action==='check') {
+    else if(input.action==='check'||input.action==='diagnose') {
       const summary=await inspect();
       const cfg=await api('GET',B+'/lesson-practice/config');
       if(!cfg.config||!Number.isInteger(cfg.config.revision)) throw Error('config_revision_missing');

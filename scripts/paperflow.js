@@ -15,7 +15,11 @@ async (input) => {
       headers:body===undefined?{}:{'Content-Type':'application/json'},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(45000)});
     calls.push({method,path,status:response.status,ms:Math.round(performance.now()-t)});
-    if(!response.ok)fail(response.status===409?'version_conflict':response.status===401?'login_required':'api_failed',{status:response.status,path});
+    if(!response.ok){
+      let body;try{body=await response.json();}catch{}
+      fail(response.status===409?'version_conflict':response.status===401?'login_required':response.status===422?'validation_failed':'api_failed',
+        {status:response.status,path,...(typeof body?.detail==='string'?{message:body.detail.slice(0,500)}:{})});
+    }
     return response.json();
   }
   const full=()=>api('GET',B+'/analysis?view=catalog');
@@ -31,8 +35,48 @@ async (input) => {
       total_pages:batch.total_pages,analysis_status:a.status,frame_revision:a.frame_revision,
       source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
       reference_start:a.reference_start,frames:(a.frames||[]).map(f=>({id:f.id,label:f.label,parent_id:f.parent_id||null,regions:f.regions,source:f.source})),
-      questions:(a.questions||[]).map(q=>({id:q.id,label:q.label,parent_id:q.parent_id||null,conversion_status:q.conversion_status,issue_count:(q.issues||[]).length})),
+      questions:(a.questions||[]).map(catalogQuestion),
       reviewed:false};
+  }
+  function catalogQuestion(q){
+    const text=v=>typeof v==='string'?v:typeof v?.text==='string'?v.text:'';
+    const plain=v=>Array.isArray(v)?v.map(plain):v&&typeof v==='object'?
+      typeof v.text==='string'?{text:v.text}:Object.fromEntries(Object.entries(v).filter(([k])=>!['html','json'].includes(k)).map(([k,x])=>[k,plain(x)])):v;
+    return {id:q.id,label:q.label,parent_id:q.parent_id||null,conversion_status:q.conversion_status,
+      issue_count:(q.issues||[]).length,question_type_key:q.content?.questionTypeKey,
+      child_count:(q.content?.children||[]).length,
+      elements:(q.content?.elements||[]).map(e=>({type:e.type,text:text(e.content),
+        ...(e.options?{selection_type:e.config?.selectionType,options:e.options.map((o,i)=>({id:o.id,position:i+1,
+          text:(o.cells||[]).map(text),...(o.label?{label:o.label}:{})}))}:{}),
+        ...(e.blanks?{blank_ids:e.blanks}:{}),...(e.answers!==undefined?{answers:plain(e.answers)}:{})})),
+      blank_definitions:(q.blanks||[]).map(b=>({id:b.id,label:b.label})),
+      extras:(q.content?.extras||[]).filter(e=>text(e.content)).map(e=>({type:e.type,text:text(e.content)}))};
+  }
+  function frameProblem(a,pages){
+    const failed=a.localization_failed_pages||[],issues=a.localization_issues||[];
+    const retryPages=failed.length?failed:!(a.frames||[]).length&&Number.isInteger(pages)&&pages>0?
+      Array.from({length:pages},(_,i)=>i):[];
+    if(!(a.frames||[]).length||failed.length||issues.length)return {
+      code:!(a.frames||[]).length?'precut_empty':'precut_pages_failed',failed_pages:failed,
+      issues:issues.map(s=>String(s).slice(0,500)),frame_revision:a.frame_revision,
+      retryable_pages:retryPages.filter(p=>!(a.frames||[]).some(f=>f.source==='manual'&&f.regions.some(r=>r.page===p)))};
+    return null;
+  }
+  function reviewTasks(check,a,batch){
+    const grouped=new Map();
+    for(const issue of check.check?.issues||[]){
+      if(!['blocker','failure'].includes(issue.severity))continue;
+      const pid=issue.paper_id||null;
+      if(!grouped.has(pid)){
+        const paper=batch.students.find(s=>s.id===pid);
+        grouped.set(pid,{paper_id:pid,index:paper?.index,pdf_pages:paper?[paper.start+1,paper.start+batch.pages_per_paper]:null,issues:[]});
+      }
+      grouped.get(pid).issues.push(issue);
+    }
+    const qids=new Set([...grouped.values()].flatMap(g=>g.issues.map(i=>i.question_id).filter(Boolean)));
+    return {paper_count:grouped.size,issue_count:[...grouped.values()].reduce((n,g)=>n+g.issues.length,0),
+      papers:[...grouped.values()],questions:(a.questions||[]).filter(q=>qids.has(q.id)).map(catalogQuestion),
+      identity_pending:check.unlinked||[],accuracy_verified:false};
   }
   function validate(frames,pages) {
     if(frames.length>600)fail('invalid_frame_count');
@@ -73,6 +117,16 @@ async (input) => {
         if(index<0||!Array.isArray(op.children)||op.children.length<2||result.some(f=>f.parent_id===op.id))fail('invalid_independent_split');
         const children=op.children.map(f=>({...clone(f),parent_id:null,source:'manual'}));
         result.splice(index,1,...children);
+      }else if(op.type==='promote_children'){
+        const parent=result.find(f=>f.id===op.id);
+        const existing=result.filter(f=>f.parent_id===op.id),ids=new Set(existing.map(f=>f.id));
+        if(!parent||parent.parent_id||existing.length<2||!Array.isArray(op.children)||
+          op.children.length!==existing.length||new Set(op.children.map(f=>f.id)).size!==ids.size||
+          op.children.some(f=>!ids.has(f.id)||!Array.isArray(f.regions)||!f.regions.length)||
+          result.some(f=>ids.has(f.parent_id)))fail('invalid_independent_promotion');
+        const index=result.findIndex(f=>f.id===op.id);
+        const children=op.children.map(f=>({...clone(existing.find(old=>old.id===f.id)),...clone(f),parent_id:null,source:'manual'}));
+        result=result.filter(f=>f.id!==op.id&&!ids.has(f.id));result.splice(Math.min(index,result.length),0,...children);
       }else fail('unsupported_edit');
     }
     return validate(result,pages);
@@ -103,7 +157,7 @@ async (input) => {
         reference_student_id:a.reference_student_id,after_revision:next.frame_revision,frames_signature:signature(next.frames),
         edit_signature:JSON.stringify(plan.operations),
         expected_leaf_labels:plan.expected_leaf_labels,
-        independent_labels:plan.operations.filter(op=>op.type==='split').flatMap(op=>op.children.map(f=>f.label))};
+        independent_labels:plan.operations.filter(op=>['split','promote_children'].includes(op.type)).flatMap(op=>op.children.map(f=>f.label))};
       transitions.push({action:'frames_saved',edited_operations:plan.operations.length,frames:next.frames.length});
     }
     if(confirm&&next.status==='awaiting_frames'){
@@ -162,6 +216,72 @@ async (input) => {
     await api('PUT',B+'/roster',{revision:plan.revision,semester_id:plan.semester_id,class_ids:plan.class_ids,scope:plan.scope});
     transitions.push({action:'scope_selected'});
   }
+  async function evidence(plan){
+    const [batch,a]=await Promise.all([api('GET',B),full()]);
+    const paper=batch.students.find(s=>s.id===plan?.paper_id);if(!paper)fail('paper_not_found');
+    const ids=plan.question_ids;
+    if(ids&&(!Array.isArray(ids)||!ids.length||ids.length>50||new Set(ids).size!==ids.length||
+      ids.some(id=>!(a.questions||[]).some(q=>q.id===id))))fail('invalid_question_selection');
+    const d=await api('GET',B+'/analysis/students/'+paper.id),student=d.student||{};
+    return {source_pdf_sha256:a.source_pdf_sha256,frame_revision:a.frame_revision,catalog_revision:a.catalog_revision,
+      paper_id:paper.id,index:paper.index,pdf_pages:[paper.start+1,paper.start+batch.pages_per_paper],
+      questions:(a.questions||[]).filter(q=>!ids||ids.includes(q.id)).map(catalogQuestion),
+      observations:(student.answers||[]).filter(x=>!ids||ids.includes(x.question_id)).map(x=>({
+        question_id:x.question_id,verdict:x.verdict,answer_text:x.answer_text,answer_state:x.answer_state,
+        response_conversion_status:x.response_conversion_status,
+        blanks:(x.blanks||[]).map(b=>({blank_id:b.blank_id,answer_text:b.answer_text,answer_state:b.answer_state,verdict:b.verdict})),
+        response_regions:x.response_regions||[],source_refs:x.source_refs||[]})),reviewed:false,submitted:false};
+  }
+  async function responses(plan){
+    const stop=await control();if(stop)return stop;
+    const [batch,initial]=await Promise.all([api('GET',B),api('GET',B+'/analysis')]);let a=initial;
+    if(batch.workflow_mode!=='scan')fail('unsupported_workflow');
+    if(a.stale||a.status!=='completed')fail('source_not_completed');
+    if(!plan||!plan.frame_revision||plan.catalog_revision===undefined||!plan.source_pdf_sha256||
+      plan.source_pdf_sha256!==a.source_pdf_sha256||plan.frame_revision!==a.frame_revision||
+      plan.catalog_revision!==a.catalog_revision)fail('response_source_changed');
+    if(!Array.isArray(plan.assignments)||!plan.assignments.length||plan.assignments.length>100)fail('invalid_responses');
+    const seen=new Set(),prepared=[];
+    for(const op of plan.assignments){
+      const key=JSON.stringify([op.paper_id,op.question_id]);
+      const q=(a.questions||[]).find(q=>q.id===op.question_id),s=(a.students||[]).find(s=>s.id===op.paper_id);
+      if(seen.has(key)||!q||!batch.students.some(p=>p.id===op.paper_id)||!s?.answers?.some(x=>x.question_id===op.question_id)||
+        op.evidence_confirmed!==true||typeof op.evidence_note!=='string'||!op.evidence_note.trim())fail('response_evidence_required');
+      seen.add(key);
+      const elements=(q.content?.elements||[]).filter(e=>e.type!=='richText');
+      if(elements.length!==1)fail('unsupported_response_type');
+      const e=elements[0];let response;
+      if(e.type==='choice'){
+        const positions=op.selected_option_positions,options=e.options||[];
+        if(!Array.isArray(positions)||!positions.length||new Set(positions).size!==positions.length||
+          positions.some(p=>!Number.isInteger(p)||p<1||p>options.length)||
+          (e.config?.selectionType==='single'&&positions.length!==1))fail('invalid_observed_options');
+        const ids=positions.map(p=>options[p-1].id);
+        if(ids.some(id=>typeof id!=='string'||!id))fail('invalid_option_ids');
+        response={answer_text:ids.join(','),blanks:[]};
+      }else if(e.type==='inlineFill'){
+        const expected=(q.blanks||[]).map(b=>b.id);
+        if(!expected.length||!Array.isArray(op.blanks)||op.blanks.length!==expected.length||
+          new Set(op.blanks.map(b=>b.blank_id)).size!==expected.length||
+          op.blanks.some(b=>!expected.includes(b.blank_id)||typeof b.answer_text!=='string'||b.answer_text.length>10000||
+            !['answered','unanswered'].includes(b.answer_state)||
+            (b.answer_state==='answered'?!b.answer_text.trim():!!b.answer_text.trim())))fail('invalid_observed_blanks');
+        const blanks=expected.map(id=>{const b=op.blanks.find(b=>b.blank_id===id);return {blank_id:id,answer_text:b.answer_text,answer_state:b.answer_state};});
+        response={answer_text:blanks.map(b=>b.answer_text).join('；'),blanks};
+      }else if(e.type==='textResponse'){
+        if(typeof op.answer_text!=='string'||!op.answer_text.trim()||op.answer_text.length>30000)fail('invalid_observed_text');
+        response={answer_text:op.answer_text,blanks:[]};
+      }else fail('unsupported_response_type');
+      prepared.push({paper_id:op.paper_id,question_id:op.question_id,response});
+    }
+    for(const op of prepared){
+      if(!a.review_token)fail('review_token_missing');
+      a=await api('PATCH',B+'/analysis/students/'+op.paper_id+'/questions/'+op.question_id,
+        {review_token:a.review_token,response_only:true,response:op.response});
+      transitions.push({action:'response_saved',paper_id:op.paper_id,question_id:op.question_id});
+    }
+    return {outcome:'responses_saved',saved:prepared.length,changed_teacher_verdicts:false,submitted:false};
+  }
   async function run(){
     const readonly=await control();if(readonly)return readonly;
     const batch=await api('GET',B);
@@ -179,6 +299,8 @@ async (input) => {
     const visited=new Set();
     for(let n=0;n<25;n++){
       if(a.status==='awaiting_frames'){
+        const problem=frameProblem(a,batch.pages_per_paper);
+        if(problem&&!input.plan?.frames)return {outcome:'needs_precut_recovery',diagnosis:problem,submitted:false};
         if(!input.plan?.frames)return {outcome:'needs_frame_review',review:snapshot(batch,a),submitted:false};
         await apply(batch,a,input.plan.frames,true);a=await full();
       }else if(['generating','catalog_confirmed','frames_confirmed','processing'].includes(a.status)){
@@ -186,7 +308,7 @@ async (input) => {
         do{
           state=await api('GET',B+'/analysis/status');
           if(!['generating','catalog_confirmed','frames_confirmed','processing'].includes(state.status))break;
-          if(performance.now()>=deadline)return {outcome:'waiting',analysis_status:state.status,submitted:false};
+          if(performance.now()>=deadline)return {outcome:'waiting',analysis_status:state.status,progress:state.progress,submitted:false};
           await new Promise(resolve=>setTimeout(resolve,input.interval*1000));
         }while(true);
         a=await full();
@@ -207,7 +329,7 @@ async (input) => {
         if(input.plan?.associations)await associate(input.plan.associations);
         const check=await inspectOrCheck('check');
         return {...check,visual_review_performed:!!receipt||input.plan?.reference_reviewed===true,
-          expected_granularity_verified:!!expected,submitted:false};
+          expected_granularity_verified:!!expected,review_tasks:reviewTasks(check,a,batch),submitted:false};
       }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,submitted:false};
       const key=JSON.stringify([a.status,a.frame_revision,a.catalog_revision]);
       if(visited.has(key))return {outcome:'no_progress',analysis_status:a.status,submitted:false};
@@ -227,6 +349,42 @@ async (input) => {
       const stop=await control();result=stop||await associate(input.plan);
     }
     else if(input.action==='run')result=await run();
+    else if(input.action==='evidence')result=await evidence(input.plan);
+    else if(input.action==='responses')result=await responses(input.plan);
+    else if(input.action==='retry-precut'){
+      const stop=await control();
+      if(stop)result=stop;
+      else{
+        const a=await full(),p=input.plan?.page;
+        if(a.status!=='awaiting_frames'||a.frame_revision!==input.plan?.frame_revision)fail('version_conflict');
+        const batch=await api('GET',B);
+        if(batch.workflow_mode!=='scan')fail('unsupported_workflow');
+        if(!Number.isInteger(p)||p<0||p>=batch.pages_per_paper||
+          ((a.frames||[]).length&&!(a.localization_failed_pages||[]).includes(p)))fail('invalid_retry_page');
+        if((a.frames||[]).some(f=>f.source==='manual'&&f.regions.some(r=>r.page===p)))fail('manual_frames_present');
+        await api('POST',B+'/analysis/frames/retry-precut',{frame_revision:a.frame_revision,page:p});
+        result={outcome:'retry_started',page:p,submitted:false};
+      }
+    }else if(input.action==='diagnose'){
+      const stop=await control();if(stop)result=stop;
+      else{
+      const [batch,a]=await Promise.all([api('GET',B),full()]);
+      if(a.status==='awaiting_frames'){
+        const problem=frameProblem(a,batch.pages_per_paper);
+        result={outcome:problem?'needs_precut_recovery':'needs_frame_review',
+          diagnosis:problem,review:snapshot(batch,a),submitted:false};
+      }
+      else if(a.status==='completed'){
+        const check=await inspectOrCheck('diagnose');result={...check,review_tasks:reviewTasks(check,a,batch),submitted:false};
+      }else result={outcome:a.status==='awaiting_confirmation'?'needs_catalog_review':'needs_targeted_recovery',
+        analysis_status:a.status,progress:a.progress,review:snapshot(batch,a),submitted:false};
+      }
+    }else if(input.action==='usage'){
+      const usage=await api('GET',B+'/model-usage'),s=usage.summary||{};
+      result={usage_source:usage.usage_source||'unknown',historical_backfill:usage.historical_backfill===true,
+        summary:s,phases:usage.phases||{},tokens_complete:Number.isFinite(s.total_tokens)&&s.total_tokens_missing_attempts===0,
+        submitted:false};
+    }
     else if(input.action==='check'){
       const stop=await control();result=stop||await inspectOrCheck(input.action);
     }else result=await inspectOrCheck(input.action);

@@ -1,14 +1,14 @@
 # scan-marked-papers
 
-v1.4.0：试卷批改、扫描与整理技能，支持新卷快速批改、智能批改、已批教师卷扫描，以及从已有记录链接接着做。接口优先；扫描模式有可用浏览器 CLI 适配器时，优先批量编排，工具缺失则回退接口或浏览器。
+v1.5.0：试卷批改、扫描与整理技能，支持新卷快速批改、智能批改、已批教师卷扫描，以及从已有记录链接接着做。接口优先；扫描模式有可用浏览器 CLI 适配器时，优先批量编排，工具缺失则回退接口或浏览器。
 
 默认只完成同步检查，交付批阅台链接，不提交课堂；只有本次明确要求实际同步才进入原同步流程。统计准确、题目准确优先，严格核对参考图，独立计算式逐题拆成可订正单题。学生个人图按风险处理，全量准确性深审由老师另选。看不清的姓名暂留未关联，完成后集中报告试卷份号、页码与实际可见特征，不猜人。
 
 ## 安装与更新
 
-从本仓库 **main** 下载 [scan-marked-papers.zip](https://github.com/leondasdasdasd/scan-marked-papers/blob/main/scan-marked-papers.zip)，解压到 `~/.codex/skills/`，保留 `scan-marked-papers/` 目录。安装前备份旧目录并保留本地修改；安装后读取 `SKILL.md` 的 `metadata.version`，本次新版应为 `1.4.0`。其他支持技能文件的智能体也可读取 [SKILL.md](SKILL.md) 及其引用文件。
+从本仓库 **main** 下载 v1.5.0 [scan-marked-papers.zip](https://github.com/leondasdasdasd/scan-marked-papers/blob/main/scan-marked-papers.zip)，解压到 `~/.codex/skills/`，保留 `scan-marked-papers/` 目录。安装前备份旧目录并保留本地修改；安装后回读实际安装目录 `SKILL.md` 的 `metadata.version`，本次应为 `1.5.0`。其他支持技能文件的智能体也可读取 [SKILL.md](SKILL.md) 及其引用文件。
 
-此次新版安装包位于仓库 main；[GitHub Releases](https://github.com/leondasdasdasd/scan-marked-papers/releases) 尚未更新，不要把旧 Release 当成 v1.4.0。更新流程见 [skill-update.md](references/skill-update.md)，只查看版本不等于安装，不自动更新。
+本版安装包位于仓库 **main**；[GitHub Releases](https://github.com/leondasdasdasd/scan-marked-papers/releases) 中的旧发布不是 v1.5.0，请勿混用。更新流程见 [skill-update.md](references/skill-update.md)，只查看版本不等于安装，不自动更新。
 
 ## 使用与依赖
 
@@ -16,12 +16,16 @@ v1.4.0：试卷批改、扫描与整理技能，支持新卷快速批改、智�
 
 CLI 通过 Python 标准库执行，依赖可用的 Playwright **run-code / page.evaluate** 浏览器适配器。默认 wrapper 为 `~/.codex/skills/playwright/scripts/playwright_cli.sh`，其他兼容入口可由 `--wrapper` 指定；没有适配器仍可按原技能流程工作。生成全参考页及接触表另外需要 `pymupdf`、`Pillow`。完整契约见 [cli.md](references/cli.md)。
 
-CLI 的新 `run` 当前仅支持 `workflow_mode=scan`：合并状态读取、阶段推进、参考校对包、版本化批量题框编辑、独立拆题、有证据的批量关联、统计和预检。校对包须由智能体实际审图后应用，不把生成或标记当验收。grading 的批改、目录内容确认及 CLI 未支持的恢复步骤仍走原接口/页面；CLI 不自动处理所有工作流，也不提交导入。客户端检查点不是服务端 exactly-once，超时先回读，不重放已保存动作。
+新版 CLI 当前仅支持 `workflow_mode=scan`。优先用 `run --follow` 在有界时间内跟进等待，直到需要审图、目录校对、阻塞处理或到达终点；默认输出紧凑摘要，全局 `--output` 保存完整 JSON，必要时用 `--verbose` 查看完整输出。一次生成的校对包和精简目录可复用，避免反复读取大响应。
+
+预切失败通过 `diagnose` 集中诊断；完成阶段的 review_tasks 按卷、题和页码组织阻塞，再用 `evidence` 获取必要的目录与作答证据定位。实际审卷后，可用 `responses --plan` 定点修复作答结构：选择位置映射到真实稳定选项 ID，逐空作答按真实空位对应，保留教师判定；不调用模型，不自动猜答案。已有父子框可在审图后显式提升为独立题。校对包或确认标记本身不代表已完成视觉验收。
+
+grading 的批改、目录内容保存/确认及 CLI 未支持的恢复步骤仍走原接口/页面；CLI 不自动处理所有工作流，也不提交导入。客户端检查点与顺序修复不是服务端 exactly-once 或跨请求事务；超时或部分失败先回读已保存状态，再处理剩余范围，不重放整包动作。
 
 ## 验证与速度边界
 
-本轮完成 26 项合成状态回归、11 项原应用持久化联调，以及 3 组交错隔离回放。回放复用真实旧模型产物，无新模型调用：编排耗时由 57.756 秒降至 7.963 秒，工具调用由 26 次降至 3 次，题框保存由 9 次合并为 1 次。这些结果仅覆盖回放编排，不含模型处理、外部上传与视觉判断，不能解释为 8 秒处理一套线上冷卷。
+v1.5.0 本轮通过 39 项合成 CLI 回归、3 项输出/follow 检查，以及 10 项原应用既有契约测试。它们验证 CLI 编排、输出与相关既有接口约束，不等于新卷真实全流程验收。
 
-既有扫描实卷验证覆盖 23 份、15 道独立题（含 6 道独立计算题）、345 条作答及媒体/同步检查。快速/智能批改与其他中途接手契约已核对源码，但新增链路尚未完成实卷验收；课堂实际导入与学生订正未验证。结构统计一致不等于全量判断准确，检查未通过或未关联范围必须如实报告。
+本轮以真实目录作离线输出对比，字符数由 72,346 降至 7,749，减少 89.29%；该结果只衡量输出量，不代表 token 降幅或整体提速。v1.5.0 尚未完成从新卷上传到最终全批同步检查的全套真实重跑，也未验证课堂实际导入与学生订正；快速/智能批改不在本版 CLI 支持范围。结构统计一致不等于全量判断准确，检查未通过或未关联范围必须如实报告。
 
 仓库不包含账号凭证、试卷或学生数据。
