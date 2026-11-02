@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Experimental browser-session CLI. No credentials leave the browser context."""
+import argparse
+import json
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+from urllib.parse import urlsplit
+
+JS = r"""async (input) => {
+  if (location.origin !== input.origin) throw Error('origin_mismatch');
+  const calls = [];
+  async function api(method, path, body) {
+    const started = performance.now();
+    const response = await fetch(path, {method, credentials:'same-origin', redirect:'error',
+      headers: body === undefined ? {} : {'Content-Type':'application/json'},
+      ...(body === undefined ? {} : {body:JSON.stringify(body)}), signal:AbortSignal.timeout(45000)});
+    calls.push({method,path,status:response.status,ms:Math.round(performance.now()-started)});
+    if (!response.ok) {const error=new Error('api_error'); error.status=response.status; throw error;}
+    return await response.json();
+  }
+  const B = '/api/batches/' + input.batch;
+  let batchPaperIds=[];
+  const cleanCheck = d => ({ready:d.ready===true,status:d.status,counts:d.counts,
+    issues:(d.issues||[]).map(x=>({code:x.code,severity:x.severity})),source_version:d.source_version});
+  const compact = d => ({id:d.id,status:d.status,stage:d.stage,scan_phase:d.scan_phase,
+    revision:d.revision,
+    frame_revision:d.frame_revision,catalog_revision:d.catalog_revision,
+    reference_student_id:d.reference_student_id,
+    total_pages:d.total_pages,pages_per_paper:d.pages_per_paper,
+    students:(d.students||[]).map(s=>({id:s.id,index:s.index,start:s.start,status:s.status})),
+    question_count:(d.questions||[]).length,
+    frame_count:(d.frames||[]).length,
+    stale:!!d.stale,has_error:!!(d.error||d.catalog_error)});
+  async function inspect() {
+    const [batch,a,roster] = await Promise.all([api('GET',B),api('GET',B+'/analysis?view=summary'),api('GET',B+'/roster')]);
+    const questions=a.questions||[];
+    const parents=new Set(questions.map(q=>q.parent_id).filter(Boolean));
+    const leaves=questions.filter(q=>!parents.has(q.id));
+    const expected=new Set(batch.students.map(s=>s.id));
+    batchPaperIds=[...expected];
+    const seen=new Set(),duplicates=[],counts={};
+    let answers=0,missing=0,duplicate_answers=0,unexpected_answers=0;
+    const ids=new Set(leaves.map(q=>q.id));
+    for(const s of a.students||[]) {
+      if(seen.has(s.id)) duplicates.push(s.id);
+      seen.add(s.id);
+      const qids=new Set();
+      for(const answer of s.answers||[]) {
+        const id=answer.question_id||answer.id;
+        if(!ids.has(id)) {unexpected_answers++;continue;}
+        if(qids.has(id)) duplicate_answers++;
+        qids.add(id);answers++;
+        const verdict=answer.verdict||'unknown';counts[verdict]=(counts[verdict]||0)+1;
+      }
+      missing+=leaves.length-qids.size;
+    }
+    const unlinked=(roster.papers||[]).filter(p=>!p.student_id).map(p=>({paper_id:p.id,index:p.index,
+      pdf_pages:[Number(p.start)+1,Number(p.start)+Number(batch.pages_per_paper)],status:p.status}));
+    const rosterIds=(roster.papers||[]).map(p=>p.id);
+    const rosterCoverage=rosterIds.length===expected.size&&new Set(rosterIds).size===expected.size&&rosterIds.every(id=>expected.has(id));
+    const missing_papers=[...expected].filter(id=>!seen.has(id));
+    const unexpected_papers=[...seen].filter(id=>!expected.has(id));
+    const complete=a.status==='completed'&&!a.stale&&new Set(questions.map(q=>q.id)).size===questions.length&&
+      expected.size>0&&rosterCoverage&&leaves.length>0&&!missing_papers.length&&
+      !unexpected_papers.length&&!duplicates.length&&!missing&&!duplicate_answers&&!unexpected_answers;
+    return {batch_id:batch.id,workflow_mode:batch.workflow_mode,analysis_status:a.status,stale:!!a.stale,
+      papers:expected.size,covered_papers:seen.size,leaf_questions:leaves.length,answers,verdicts:counts,
+      missing_answers:missing,duplicate_answers,unexpected_answers,missing_papers,unexpected_papers,
+      duplicate_papers:duplicates,unlinked,roster_coverage_complete:rosterCoverage,structure_complete:complete,
+      visual_review_performed:false,full_accuracy_verified:false,
+      link:input.origin+'/exams/'+input.batch+'/analysis'};
+  }
+  try {
+    let result;
+    if(input.action==='inspect') result=await inspect();
+    else if(input.action==='check') {
+      const summary=await inspect();
+      const cfg=await api('GET',B+'/lesson-practice/config');
+      if(!cfg.config||!Number.isInteger(cfg.config.revision)) throw Error('config_revision_missing');
+      const allIds=new Set(batchPaperIds);
+      const selected=cfg.config.selected_paper_ids;
+      const scopeComplete=selected===null||selected===undefined||
+        (Array.isArray(selected)&&selected.length===allIds.size&&new Set(selected).size===allIds.size&&selected.every(id=>allIds.has(id)));
+      let check=await api('POST',B+'/lesson-practice/preflight',{
+        revision:cfg.config.revision,allow_pending_formula_protocol:false});
+      const started=performance.now();
+      const mediaPending=(check.issues||[]).some(i=>['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)&&i.severity==='pending');
+      const hardFailure=(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity));
+      if(input.prepare && check.ready!==true && mediaPending && !hardFailure && scopeComplete && summary.structure_complete && !summary.unlinked.length) {
+        const existing=await api('GET',B+'/lesson-practice/progress');
+        if(existing.preparation?.status!=='running')
+          await api('POST',B+'/lesson-practice/progress/start',{revision:cfg.config.revision});
+        while(performance.now()-started<input.timeout*1000) {
+          const p=await api('GET',B+'/lesson-practice/progress');
+          const state=p.preparation?.status;
+          if(state==='awaiting_confirmation') {
+            break;
+          }
+          if(['blocked','failed','paused'].includes(state)) break;
+          await new Promise(resolve=>setTimeout(resolve,input.interval*1000));
+        }
+        const latest=await api('GET',B+'/lesson-practice/config');
+        check=await api('POST',B+'/lesson-practice/preflight',{
+          revision:latest.config.revision,allow_pending_formula_protocol:false});
+      }
+      const coverageMatches=check.counts?.students===summary.papers&&
+        check.counts?.questionResults===summary.answers&&check.counts?.gradableQuestions===summary.leaf_questions&&
+        check.counts?.skippedPapers===0;
+      const ready=check.ready===true&&scopeComplete&&coverageMatches&&
+        check.status==='awaiting_confirmation'&&summary.structure_complete&&!summary.unlinked.length;
+      result={...summary,scope_complete:scopeComplete,check_coverage_matches:coverageMatches,
+        check:cleanCheck(check),ready:check.ready===true&&scopeComplete&&coverageMatches&&
+        check.status==='awaiting_confirmation'&&summary.structure_complete&&!summary.unlinked.length,
+        outcome:ready?'ready':!scopeComplete||!coverageMatches?'coverage_gap':summary.unlinked.length?'identity_pending':
+          (check.issues||[]).some(i=>['blocker','failure'].includes(i.severity))?'blocked':'pending',
+        stopped_at:'preflight',submitted:false};
+    } else if(input.action==='watch') {
+      const started=performance.now();let state;
+      do {
+        state=await api('GET',B+'/analysis/status');
+        if(['completed','partial','failed','awaiting_frames','awaiting_confirmation'].includes(state.status))break;
+        if(performance.now()-started>=input.timeout*1000)break;
+        await new Promise(resolve=>setTimeout(resolve,input.interval*1000));
+      }while(true);
+      result=compact(state);
+      result.timed_out=!['completed','partial','failed','awaiting_frames','awaiting_confirmation'].includes(state.status);
+    } else if(input.action==='request') {
+      result=compact(await api(input.method,input.path,input.body));
+    } else if(input.action==='session') {
+      const d=await api('GET','/api/session?refresh_profile=false');
+      result={authenticated:!!d.user,teacher:['employee','teacher'].includes(d.user?.identity),
+        models:Object.fromEntries(Object.entries(d.models||{}).map(([k,v])=>[k,{configured:v.configured,workflows:v.workflows}]))};
+    }
+    return {ok:true,result,calls};
+  } catch(error) {return {ok:false,error:{code:['origin_mismatch','config_revision_missing'].includes(error.message)?error.message:'request_failed',status:error.status||null},calls};}
+}"""
+
+
+def browser(args, code):
+    started = time.perf_counter()
+    proc = subprocess.run([args.wrapper, '-s='+args.browser_session, 'run-code', code],
+                          capture_output=True, text=True, timeout=args.timeout+65)
+    match = re.search(r'### Result\s*\n(.*?)(?=\n### |\Z)', proc.stdout, re.S)
+    if not match:
+        return {'ok':False,'error':{'code':'browser_command_failed'},'wall_seconds':round(time.perf_counter()-started,3)}
+    try:
+        data = json.loads(match[1])
+    except ValueError:
+        return {'ok':False,'error':{'code':'invalid_browser_response'}}
+    data['wall_seconds']=round(time.perf_counter()-started,3)
+    return data
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--base-url',required=True)
+    p.add_argument('--batch-id',default='')
+    p.add_argument('--browser-session',required=True)
+    p.add_argument('--wrapper',default=str(Path.home()/'.codex/skills/playwright/scripts/playwright_cli.sh'))
+    p.add_argument('--timeout',type=int,default=45)
+    p.add_argument('--interval',type=int,default=5)
+    sub=p.add_subparsers(dest='action',required=True)
+    for name in ('session','inspect','watch'): sub.add_parser(name)
+    c=sub.add_parser('check');c.add_argument('--prepare',action='store_true')
+    r=sub.add_parser('request');r.add_argument('--method',choices=['GET','POST','PUT','PATCH'],default='GET');r.add_argument('--path',required=True);r.add_argument('--body-file',type=Path)
+    u=sub.add_parser('upload');u.add_argument('--file',type=Path,required=True);u.add_argument('--pages-per-paper',type=int,required=True);u.add_argument('--key',required=True);u.add_argument('--model',default='qwen3.8-max')
+    args=p.parse_args()
+    url=urlsplit(args.base_url)
+    if url.scheme not in ('http','https') or not url.netloc or url.username or url.password or url.query or url.fragment or url.path not in ('','/'):
+        p.error('base-url must be an origin')
+    if not 1<=args.timeout<=180 or not 2<=args.interval<=30:p.error('timeout 1..180, interval 2..30')
+    if args.action not in ('session','upload') and not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}',args.batch_id):p.error('invalid batch-id')
+    payload={'action':args.action,'origin':args.base_url.rstrip('/'),'batch':args.batch_id,
+             'timeout':args.timeout,'interval':args.interval,'prepare':getattr(args,'prepare',False)}
+    if args.action=='request':
+        b='/api/batches/'+args.batch_id
+        allowed_get={b,b+'/analysis?view=summary',b+'/analysis?view=catalog',b+'/analysis/status',b+'/roster',b+'/lesson-practice/config',b+'/lesson-practice/progress'}
+        allowed={'GET':allowed_get,'POST':{b+'/analysis',b+'/analysis/frames/confirm'},
+                 'PATCH':{b+'/analysis/frames'},'PUT':{b+'/roster',b+'/lesson-practice/config'}}
+        if args.path not in allowed[args.method]:p.error('method/path is not in the experiment allowlist')
+        payload.update(method=args.method,path=args.path)
+        if args.body_file:payload['body']=json.loads(args.body_file.read_text())
+    if args.action=='upload':
+        if not args.file.is_file() or not 1<=args.pages_per_paper<=12:p.error('invalid PDF or split')
+        # The browser opens only this explicitly selected local file. No auth export.
+        setup=json.dumps({'origin':payload['origin'],'key':args.key,'pages':args.pages_per_paper,'model':args.model})
+        code='''async(page)=>{
+          const input='''+setup+''';
+          if(await page.evaluate(()=>location.origin)!==input.origin)return {ok:false,error:{code:'origin_mismatch'}};
+          await page.evaluate(()=>{const old=document.getElementById('paperflow-input');if(old)old.remove();const e=document.createElement('input');e.type='file';e.id='paperflow-input';e.hidden=true;document.body.appendChild(e);});
+          try {
+            await page.locator('#paperflow-input').setInputFiles('''+json.dumps(str(args.file.resolve()))+''');
+            return await page.evaluate(async input=>{
+              const f=document.getElementById('paperflow-input').files[0];const data=new FormData();data.append('file',f);
+              data.append('pages_per_paper',input.pages);data.append('workflow_mode','scan');data.append('llm_model',input.model);
+              const response=await fetch('/api/batches',{method:'POST',body:data,credentials:'same-origin',redirect:'error',headers:{'Idempotency-Key':input.key},signal:AbortSignal.timeout(45000)});
+              if(!response.ok)return {ok:false,error:{code:'upload_failed',status:response.status}};
+              const b=await response.json();return {ok:true,result:{batch_id:b.id,total_pages:b.total_pages,pages_per_paper:b.pages_per_paper,students:b.students.map(s=>({id:s.id,index:s.index,start:s.start})),workflow_mode:b.workflow_mode}};
+            },input);
+          }finally{await page.evaluate(()=>document.getElementById('paperflow-input')?.remove());}
+        }'''
+    else:
+        code='async(page)=>await page.evaluate(('+JS+'),'+json.dumps(payload,ensure_ascii=False)+')'
+    try:data=browser(args,code)
+    except (OSError,subprocess.TimeoutExpired):data={'ok':False,'error':{'code':'transport_timeout_read_state_before_retry'}}
+    print(json.dumps(data,ensure_ascii=False))
+    return 0 if data.get('ok') else 1
+
+
+if __name__=='__main__':sys.exit(main())
