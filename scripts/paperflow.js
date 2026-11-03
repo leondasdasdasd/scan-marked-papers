@@ -4,6 +4,7 @@ async (input) => {
   const calls=[], transitions=[];
   let receipt=input.checkpoint?.frame_receipt||null;
   let associations=input.checkpoint?.association_receipt||null;
+  let catalogReceipt=input.checkpoint?.catalog_receipt||null;
   const clone=x=>JSON.parse(JSON.stringify(x));
   const fail=(code,details={})=>{throw Object.assign(new Error(code),{code,details});};
   if(location.origin!==input.origin)return {ok:false,error:{code:'origin_mismatch'}};
@@ -11,16 +12,32 @@ async (input) => {
     return {ok:false,error:{code:'checkpoint_origin_or_batch_mismatch'}};
   async function api(method,path,body) {
     const t=performance.now();
-    const response=await fetch(path,{method,credentials:'same-origin',redirect:'error',
+    let response;
+    try{response=await fetch(path,{method,credentials:'same-origin',redirect:'error',
       headers:body===undefined?{}:{'Content-Type':'application/json'},
-      ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(45000)});
+      ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(45000)});}
+    catch{fail('transport_uncertain',{method,path,retryable:false,next_action:'read_state_before_retry'});}
     calls.push({method,path,status:response.status,ms:Math.round(performance.now()-t)});
     if(!response.ok){
-      let body;try{body=await response.json();}catch{}
-      fail(response.status===409?'version_conflict':response.status===401?'login_required':response.status===422?'validation_failed':'api_failed',
-        {status:response.status,path,...(typeof body?.detail==='string'?{message:body.detail.slice(0,500)}:{})});
+      let value;try{value=await response.json();}catch{}
+      const detail=value?.detail;
+      const message=typeof detail==='string'?detail:typeof detail?.message==='string'?detail.message:undefined;
+      const serverCode=response.headers?.get?.('X-Error-Code')||detail?.code;
+      let code=response.status===409?'version_conflict':response.status===401?'login_required':
+        response.status===403?'permission_denied':response.status===422?'validation_failed':
+        [404,405].includes(response.status)?'contract_mismatch':response.status===429?'rate_limited':'api_failed';
+      if(response.status===422&&message==='标准卷选择格式无效')code='invalid_json_body';
+      const next={invalid_json_body:'verify_json_transport',validation_failed:'inspect_validation_detail',
+        version_conflict:'read_current_version',login_required:'restore_authorized_session',
+        permission_denied:'verify_identity_scope',contract_mismatch:'verify_deployed_contract',
+        rate_limited:'wait_before_reading_state',api_failed:'read_state_before_retry'};
+      fail(code,{status:response.status,method,path,retryable:false,next_action:next[code],
+        ...(message?{message:message.slice(0,500)}:{}),
+        ...(Array.isArray(detail)?{validation_errors:detail.slice(0,8).map(e=>({location:e.loc,type:e.type,message:String(e.msg||'').slice(0,300)}))}:{}),
+        ...(typeof serverCode==='string'?{server_code:serverCode.slice(0,100)}:{})});
     }
-    return response.json();
+    try{return await response.json();}
+    catch{fail('invalid_api_response',{method,path,retryable:false,next_action:'read_state_before_retry'});}
   }
   const full=()=>api('GET',B+'/analysis?view=catalog');
   const signature=frames=>JSON.stringify(frames.map(f=>({id:f.id,label:f.label,parent_id:f.parent_id||null,regions:f.regions})));
@@ -33,9 +50,12 @@ async (input) => {
   function snapshot(batch,a) {
     return {batch_id:batch.id,workflow_mode:batch.workflow_mode,pages_per_paper:batch.pages_per_paper,
       total_pages:batch.total_pages,analysis_status:a.status,frame_revision:a.frame_revision,
+      catalog_revision:a.catalog_revision,analysis_confirmation_version:batch.analysis_confirmation_version||a.analysis_confirmation_version,
       source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
       reference_start:a.reference_start,frames:(a.frames||[]).map(f=>({id:f.id,label:f.label,parent_id:f.parent_id||null,regions:f.regions,source:f.source})),
       questions:(a.questions||[]).map(catalogQuestion),
+      reference_pages:Number.isInteger(a.reference_start)?Array.from({length:batch.pages_per_paper},(_,i)=>({page:i,
+        url:input.origin+B+'/pages/'+(a.reference_start+i)+'?original=true&student_id='+encodeURIComponent(a.reference_student_id)})):[],
       reviewed:false};
   }
   function catalogQuestion(q){
@@ -79,7 +99,7 @@ async (input) => {
       identity_pending:check.unlinked||[],accuracy_verified:false};
   }
   function validate(frames,pages) {
-    if(frames.length>600)fail('invalid_frame_count');
+    if(!Array.isArray(frames)||frames.length<1||frames.length>600)fail('invalid_frame_count');
     const ids=new Set();
     for(const f of frames){
       if(typeof f.id!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(f.id)||ids.has(f.id))fail('invalid_or_duplicate_frame');
@@ -101,7 +121,7 @@ async (input) => {
   }
   function editFrames(frames,operations,pages){
     let result=clone(frames);
-    if(!Array.isArray(operations)||!operations.length)fail('empty_edit_plan');
+    if(!Array.isArray(operations))fail('empty_edit_plan');
     for(const op of operations){
       if(op.type==='set'){
         const f=result.find(f=>f.id===op.id);if(!f)fail('frame_not_found');
@@ -141,6 +161,7 @@ async (input) => {
   async function apply(batch,a,plan,confirm){
     if(!plan||typeof plan.operation_id!=='string'||!plan.operation_id)fail('edit_plan_required');
     reviewGuard(plan,a,batch);
+    if(frameProblem(a,batch.pages_per_paper)&&!plan.operations?.length)fail('precut_recovery_required');
     let next,already=false;
     if(receipt?.operation_id===plan.operation_id){
       if(receipt.edit_signature!==JSON.stringify(plan.operations))fail('operation_changed');
@@ -166,8 +187,8 @@ async (input) => {
     }
     return {already_applied:already,frame_revision:next.frame_revision,frame_count:next.frames.length};
   }
-  async function inspectOrCheck(action){
-    const d=await legacy({...input,action,prepare:action==='check'});
+  async function inspectOrCheck(action,snapshot){
+    const d=await legacy({...input,action,snapshot,api,prepare:action==='check'});
     calls.push(...(d.calls||[]));if(!d.ok)fail(d.error.code,d.error);
     return d.result;
   }
@@ -282,6 +303,57 @@ async (input) => {
     }
     return {outcome:'responses_saved',saved:prepared.length,changed_teacher_verdicts:false,submitted:false};
   }
+  function granularity(a,expected,independent=[]){
+    const parents=new Set((a.questions||[]).map(q=>q.parent_id).filter(Boolean));
+    const leaves=(a.questions||[]).filter(q=>!parents.has(q.id));
+    if(expected&&(!Array.isArray(expected)||expected.length!==leaves.length||
+      new Set(expected).size!==expected.length||expected.some(label=>!leaves.some(q=>q.label===label))))fail('business_split_mismatch');
+    if(independent.some(label=>!leaves.some(q=>q.label===label&&!q.parent_id&&!composite(q,a))))fail('business_split_mismatch');
+    return leaves;
+  }
+  async function confirmCatalog(batch,a,plan){
+    if(batch.workflow_mode!=='scan')fail('unsupported_workflow');
+    if(catalogReceipt?.operation_id===plan?.operation_id){
+      if(catalogReceipt.plan_signature!==JSON.stringify(plan))fail('operation_changed');
+      if(plan.source_pdf_sha256!==a.source_pdf_sha256||plan.reference_student_id!==a.reference_student_id)fail('source_changed');
+      if(catalogReceipt.state==='accepted'&&a.status!=='awaiting_confirmation')return {outcome:'catalog_confirmation_accepted',already_applied:true,submitted:false};
+      return {outcome:'needs_confirmation_recovery',operation_id:catalogReceipt.server_operation_id||null,
+        next_action:'read_confirmation_operation',submitted:false};
+    }
+    if(a.stale||a.status!=='awaiting_confirmation')fail('catalog_not_awaiting_confirmation');
+    reviewGuard(plan||{},a,batch);
+    if(typeof plan.operation_id!=='string'||!/^[A-Za-z0-9_-]{8,100}$/.test(plan.operation_id)||
+      plan.catalog_reviewed!==true||plan.frame_revision!==a.frame_revision||plan.catalog_revision!==a.catalog_revision)
+      fail('catalog_review_required');
+    if(!(a.questions||[]).length||(a.questions||[]).some(q=>q.conversion_status!=='converted'))fail('catalog_not_converted');
+    granularity(a,plan.expected_leaf_labels||receipt?.expected_leaf_labels,receipt?.independent_labels||[]);
+    // Fetch authoritative rich questions here; the agent need not copy them through a plan.
+    // Editing remains a separate save; this operation confirms only the version actually reviewed.
+    let body={frame_revision:a.frame_revision,catalog_revision:a.catalog_revision,questions:a.questions};
+    if((batch.analysis_confirmation_version||a.analysis_confirmation_version)===2){
+      const pre=await api('POST',B+'/merge-preflight',{source_ids:[],frame_revision:a.frame_revision,catalog_revision:a.catalog_revision});
+      if(!Array.isArray(pre.duplicates)||!pre.preflight_token||!pre.versions||!pre.operation_id)fail('invalid_confirmation_preflight');
+      if(pre.duplicates.length)return {outcome:'needs_duplicate_review',duplicates:pre.duplicates,submitted:false};
+      if(pre.source_ids?.length)fail('unexpected_merge_scope');
+      body={...body,preflight_token:pre.preflight_token,source_versions:pre.versions,duplicate_choices:{},
+        same_paper_confirmed:false,name:batch.name,name_revision:batch.name_revision||0,idempotency_key:plan.operation_id};
+      catalogReceipt={operation_id:plan.operation_id,plan_signature:JSON.stringify(plan),
+        source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
+        expected_leaf_labels:plan.expected_leaf_labels||receipt?.expected_leaf_labels,
+        server_operation_id:pre.operation_id,state:'confirming'};
+      const accepted=await api('POST',B+'/analysis/confirm-and-start',body);
+      if(accepted.status!=='accepted'||accepted.operation_id!==pre.operation_id)fail('invalid_confirmation_response');
+      catalogReceipt.state='accepted';
+      if(accepted.operation_id)catalogReceipt.server_operation_id=accepted.operation_id;
+    }else{
+      catalogReceipt={operation_id:plan.operation_id,plan_signature:JSON.stringify(plan),
+        source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
+        expected_leaf_labels:plan.expected_leaf_labels||receipt?.expected_leaf_labels,state:'confirming'};
+      await api('POST',B+'/analysis/confirm',body);catalogReceipt.state='accepted';
+    }
+    transitions.push({action:'catalog_confirmed',operation_id:catalogReceipt.server_operation_id||null});
+    return {outcome:'catalog_confirmation_accepted',operation_id:catalogReceipt.server_operation_id||null,submitted:false};
+  }
   async function run(){
     const readonly=await control();if(readonly)return readonly;
     const batch=await api('GET',B);
@@ -291,7 +363,9 @@ async (input) => {
     if(a.stale)return {outcome:'source_stale',submitted:false};
     if(!a.status||a.status==='not_generated'){
       const reference=input.plan?.reference_student_id;
-      if(!batch.students.some(s=>s.id===reference))return {outcome:'needs_reference',candidates:batch.students.slice(0,5).map(s=>({id:s.id,index:s.index})),submitted:false};
+      if(!batch.students.some(s=>s.id===reference))return {outcome:'needs_reference',papers:batch.students.length,
+        candidates:batch.students.slice(0,5).map(s=>({id:s.id,index:s.index,pdf_pages:[s.start+1,s.start+batch.pages_per_paper],
+          pages:Array.from({length:batch.pages_per_paper},(_,i)=>input.origin+B+'/pages/'+(s.start+i)+'?original=true&student_id='+encodeURIComponent(s.id))})),submitted:false};
       await api('POST',B+'/analysis',{reference_student_id:reference});transitions.push({action:'analysis_started'});
       a=await full();
     }
@@ -313,22 +387,25 @@ async (input) => {
         }while(true);
         a=await full();
       }else if(a.status==='awaiting_confirmation'){
+        if(input.plan?.catalog){
+          const confirmed=await confirmCatalog(batch,a,input.plan.catalog);
+          if(confirmed.outcome!=='catalog_confirmation_accepted')return confirmed;
+          a=await full();
+          if(a.status==='awaiting_confirmation')return {outcome:'waiting',analysis_status:a.status,submitted:false};
+          continue;
+        }
         return {outcome:'needs_catalog_review',review:snapshot(batch,a),submitted:false};
       }else if(a.status==='completed'){
         if(receipt&&(receipt.after_revision!==a.frame_revision||receipt.source_pdf_sha256!==a.source_pdf_sha256||
           receipt.reference_student_id!==a.reference_student_id||receipt.frames_signature!==signature(a.frames||[])))fail('checkpoint_changed');
-        const expected=input.plan?.frames?.expected_leaf_labels||input.plan?.expected_leaf_labels||receipt?.expected_leaf_labels;
-        const parents=new Set((a.questions||[]).map(q=>q.parent_id).filter(Boolean));
-        const leaves=(a.questions||[]).filter(q=>!parents.has(q.id));
-        if(expected&&(!Array.isArray(expected)||expected.length!==leaves.length||
-          new Set(expected).size!==expected.length||expected.some(label=>!leaves.some(q=>q.label===label))))fail('business_split_mismatch');
-        const independent=receipt?.independent_labels||[];
-        if(independent.some(label=>!leaves.some(q=>q.label===label&&!q.parent_id&&!composite(q,a))))fail('business_split_mismatch');
+        const expected=input.plan?.frames?.expected_leaf_labels||input.plan?.expected_leaf_labels||receipt?.expected_leaf_labels||catalogReceipt?.expected_leaf_labels;
+        if(catalogReceipt&&(catalogReceipt.source_pdf_sha256!==a.source_pdf_sha256||catalogReceipt.reference_student_id!==a.reference_student_id))fail('source_changed');
+        granularity(a,expected,receipt?.independent_labels||[]);
         const unconverted=(a.questions||[]).some(q=>q.conversion_status!=='converted');
         if(unconverted)return {outcome:'needs_catalog_review',review:snapshot(batch,a),submitted:false};
         if(input.plan?.associations)await associate(input.plan.associations);
-        const check=await inspectOrCheck('check');
-        return {...check,visual_review_performed:!!receipt||input.plan?.reference_reviewed===true,
+        const check=await inspectOrCheck('check',{batch});
+        return {...check,visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
           expected_granularity_verified:!!expected,review_tasks:reviewTasks(check,a,batch),submitted:false};
       }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,submitted:false};
       const key=JSON.stringify([a.status,a.frame_revision,a.catalog_revision]);
@@ -349,6 +426,11 @@ async (input) => {
       const stop=await control();result=stop||await associate(input.plan);
     }
     else if(input.action==='run')result=await run();
+    else if(input.action==='catalog'){
+      const stop=await control();
+      if(stop)result=stop;
+      else{const [batch,a]=await Promise.all([api('GET',B),full()]);result=await confirmCatalog(batch,a,input.plan);}
+    }
     else if(input.action==='evidence')result=await evidence(input.plan);
     else if(input.action==='responses')result=await responses(input.plan);
     else if(input.action==='retry-precut'){
@@ -388,7 +470,7 @@ async (input) => {
     else if(input.action==='check'){
       const stop=await control();result=stop||await inspectOrCheck(input.action);
     }else result=await inspectOrCheck(input.action);
-    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations}};
+    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt}};
   }catch(error){return {ok:false,error:{code:error.code||'transport_failed',...(error.details||{})},transitions,calls,
-    checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations}};}
+    checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt}};}
 }

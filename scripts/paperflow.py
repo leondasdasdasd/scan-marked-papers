@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 import sys
@@ -24,14 +25,24 @@ def atomic_json(path,data):
 def source():return (ROOT/'paperflow.js').read_text().replace('__LEGACY__','('+base.JS+')')
 
 
-def execute(args,action,plan=None,checkpoint=None):
+def request_payload(args,action,plan=None,checkpoint=None):
     if checkpoint is None:checkpoint=json.loads(args.checkpoint.read_text()) if args.checkpoint and args.checkpoint.exists() else {}
     if checkpoint and (checkpoint.get('origin')!=args.base_url or checkpoint.get('batch_id')!=args.batch_id):
         raise ValueError('checkpoint_origin_or_batch_mismatch')
-    payload={'action':action,'origin':args.base_url,'batch':args.batch_id,'timeout':args.timeout,
+    return {'action':action,'origin':args.base_url,'batch':args.batch_id,'timeout':args.timeout,
              'interval':args.interval,'checkpoint':checkpoint,'plan':plan,'confirm':getattr(args,'confirm',False)}
-    expression='('+source()+')('+json.dumps(payload,ensure_ascii=False)+')'
-    result=base.browser(args,'async(page)=>await page.evaluate(('+source()+'),'+json.dumps(payload,ensure_ascii=False)+')',expression)
+
+
+def execute(args,action,plan=None,checkpoint=None):
+    payload=request_payload(args,action,plan,checkpoint)
+    script_source=source()
+    expression='('+script_source+')('+json.dumps(payload,ensure_ascii=False)+')'
+    try:
+        result=base.browser(args,'async(page)=>await page.evaluate(('+script_source+'),'+json.dumps(payload,ensure_ascii=False)+')',expression)
+    except FileNotFoundError:
+        result={'ok':False,'error':{'code':'browser_backend_unavailable','retryable':False,'next_action':'use_emit_script'}}
+    except (OSError,subprocess.TimeoutExpired):
+        result={'ok':False,'error':{'code':'transport_uncertain','retryable':False,'next_action':'read_state_before_retry'}}
     if args.checkpoint and result.get('checkpoint'):atomic_json(args.checkpoint,result['checkpoint'])
     return result
 
@@ -93,8 +104,10 @@ def render_bundle(metadata,pdf_path,out):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base-url',default=base.DEFAULT_ORIGIN);parser.add_argument('--batch-id',required=True)
-    parser.add_argument('--browser-session',required=True)
+    parser.add_argument('--base-url');parser.add_argument('--batch-id')
+    parser.add_argument('--batch-url')
+    parser.add_argument('--browser-session')
+    parser.add_argument('--emit-script',type=Path)
     parser.add_argument('--wrapper',default=str(Path.home()/'.codex/skills/playwright/scripts/playwright_cli.sh'))
     base.browser_options(parser)
     parser.add_argument('--timeout',type=int,default=45);parser.add_argument('--interval',type=int,default=5)
@@ -110,10 +123,27 @@ def main():
     p=sub.add_parser('frames');p.add_argument('--edits',type=Path,required=True);p.add_argument('--confirm',action='store_true')
     p=sub.add_parser('associate');p.add_argument('--plan',type=Path,required=True)
     p=sub.add_parser('review');p.add_argument('--pdf',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--metadata',type=Path)
     p=sub.add_parser('retry-precut');p.add_argument('--page',type=int,required=True);p.add_argument('--frame-revision',required=True)
     p=sub.add_parser('evidence');p.add_argument('--paper-id',required=True);p.add_argument('--question-id',action='append')
     p=sub.add_parser('responses');p.add_argument('--plan',type=Path,required=True)
-    args=parser.parse_args();args.base_url=args.base_url.rstrip('/')
+    p=sub.add_parser('catalog');p.add_argument('--plan',type=Path,required=True)
+    p=sub.add_parser('collect');p.add_argument('--result',type=Path,required=True)
+    args=parser.parse_args()
+    import re
+    if args.batch_url:
+        link=urlsplit(args.batch_url)
+        match=re.fullmatch(r'/exams/([A-Za-z0-9_-]{1,80})(?:/analysis)?/?',link.path)
+        if link.scheme not in ('http','https') or not link.netloc or link.username or link.password or link.fragment or not match:
+            parser.error('invalid batch URL')
+        origin=link.scheme+'://'+link.netloc
+        if (args.base_url and args.base_url.rstrip('/')!=origin) or (args.batch_id and args.batch_id!=match[1]):
+            parser.error('batch URL conflicts with origin or batch id')
+        args.base_url=origin;args.batch_id=match[1]
+    args.base_url=(args.base_url or base.DEFAULT_ORIGIN).rstrip('/')
+    if not args.batch_id:parser.error('batch-id or batch-url required')
+    if not args.browser_session and not args.emit_script and args.action!='collect' and not (args.action=='review' and args.metadata):parser.error('browser-session required for browser backend')
+    if args.emit_script and args.action in ('review','collect'):parser.error('emit-script requires a browser action')
     url=urlsplit(args.base_url)
     if url.scheme not in ('http','https') or not url.netloc or url.path or url.username or url.password or url.query or url.fragment:
         parser.error('base-url must be an origin')
@@ -127,8 +157,35 @@ def main():
         plan=json.loads(plan_path.read_text()) if plan_path else None
         if args.action=='retry-precut':plan={'page':args.page,'frame_revision':args.frame_revision}
         if args.action=='evidence':plan={'paper_id':args.paper_id,'question_ids':args.question_id}
+        if args.emit_script:
+            payload=request_payload(args,args.action,plan)
+            script='('+source()+')('+json.dumps(payload,ensure_ascii=False)+')'
+            args.emit_script.parent.mkdir(parents=True,exist_ok=True)
+            args.emit_script.write_text(script,encoding='utf-8');os.chmod(args.emit_script,0o600)
+            emitted={'ok':True,'result':{'outcome':'browser_script_created',
+                'script_file':str(args.emit_script),'origin':args.base_url,'batch_id':args.batch_id,
+                'executed':False,'submitted':False}}
+            if args.output:atomic_json(args.output,emitted)
+            print(json.dumps(emitted,ensure_ascii=False))
+            return 0
         started=time.monotonic()
-        data=execute(args,'snapshot' if args.action=='review' else args.action,plan)
+        if args.action=='review' and args.metadata:
+            metadata=json.loads(args.metadata.read_text())
+            if isinstance(metadata,dict) and isinstance(metadata.get('result'),dict):metadata=metadata['result']
+            if isinstance(metadata,dict) and isinstance(metadata.get('review'),dict):metadata=metadata['review']
+            if not isinstance(metadata,dict) or metadata.get('batch_id')!=args.batch_id:
+                raise ValueError('review_batch_mismatch')
+            data={'ok':True,'result':metadata}
+        elif args.action=='collect':
+            data=json.loads(args.result.read_text())
+            if not isinstance(data,dict) or type(data.get('ok')) is not bool:
+                raise ValueError('invalid_browser_result')
+            cp=data.get('checkpoint')
+            if not isinstance(cp,dict) or cp.get('origin')!=args.base_url or cp.get('batch_id')!=args.batch_id:
+                raise ValueError('checkpoint_origin_or_batch_mismatch')
+            if args.checkpoint:atomic_json(args.checkpoint,cp)
+        else:
+            data=execute(args,'snapshot' if args.action=='review' else args.action,plan)
         if args.action=='run' and args.follow:
             calls=list(data.get('calls',[]));transitions=list(data.get('transitions',[]))
             while data.get('ok') and data.get('result',{}).get('outcome')=='waiting' and time.monotonic()-started<args.max_seconds:

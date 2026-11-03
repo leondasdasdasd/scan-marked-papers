@@ -13,6 +13,7 @@ JS = r"""async (input) => {
   if (location.origin !== input.origin) throw Error('origin_mismatch');
   const calls = [];
   async function api(method, path, body) {
+    if(input.api)return input.api(method,path,body);
     const started = performance.now();
     const response = await fetch(path, {method, credentials:'same-origin', redirect:'error',
       headers: body === undefined ? {} : {'Content-Type':'application/json'},
@@ -38,7 +39,8 @@ JS = r"""async (input) => {
     frame_count:(d.frames||[]).length,
     stale:!!d.stale,has_error:!!(d.error||d.catalog_error)});
   async function inspect() {
-    const [batch,a,roster] = await Promise.all([api('GET',B),api('GET',B+'/analysis?view=summary'),api('GET',B+'/roster')]);
+    const [batch,a,roster] = await Promise.all([input.snapshot?.batch||api('GET',B),
+      input.snapshot?.analysis||api('GET',B+'/analysis?view=summary'),api('GET',B+'/roster')]);
     const questions=a.questions||[];
     const parents=new Set(questions.map(q=>q.parent_id).filter(Boolean));
     const leaves=questions.filter(q=>!parents.has(q.id));
@@ -138,7 +140,7 @@ JS = r"""async (input) => {
         models:Object.fromEntries(Object.entries(d.models||{}).map(([k,v])=>[k,{configured:v.configured,workflows:v.workflows}]))};
     }
     return {ok:true,result,calls};
-  } catch(error) {return {ok:false,error:{code:['origin_mismatch','config_revision_missing'].includes(error.message)?error.message:'request_failed',status:error.status||null},calls};}
+  } catch(error) {return {ok:false,error:{code:error.code||(['origin_mismatch','config_revision_missing'].includes(error.message)?error.message:'request_failed'),status:error.status||null,...(error.details||{})},calls};}
 }"""
 
 

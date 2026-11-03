@@ -1,6 +1,6 @@
 # 扫描主流程接口参考
 
-本参考核对于 2026-10-26 项目源码；不是线上版本保证。路径均相对当前批阅台 origin，包含 `/api`；前端 `api()` 源码常省略该前缀。下文 `B=/api/batches/{bid}`，`L=B/lesson-practice`。请求使用当前获授权会话，不将认证内容写入文件或输出。字段、ID 和版本从真实读取结果获得，不使用本文占位值发请求。
+本参考核对于 2026-10-26 项目源码；不是线上版本保证。路径均相对当前批阅台 origin，包含 `/api`；前端 `api()` 源码常省略该前缀。下文 `B=/api/batches/{bid}`，`L=B/lesson-practice`。请求使用当前获授权会话，不将认证内容写入文件或输出。字段、ID 和版本从真实读取结果获得，不使用本文占位值发请求。scan 已支持阶段优先内置 CLI；没有兼容后端时可 emit-script 交现有浏览器 evaluate（见 [CLI](cli.md)），不反复猜字段/路由、翻压缩源码或临时拼接请求。本文用于工具未覆盖阶段的最小必要查证。
 
 ## 入口与读取
 
@@ -13,6 +13,8 @@
 | `GET B/analysis` | 完整扫描/题框/目录快照，必要时再读；轻轮询用 `?view=summary`、`/analysis/status` 或 `/analysis/version` |
 | `GET B/analysis/students/{sid}` | 按学生回读分析，不每次拉取整批答案 |
 | `GET B/pages/{absolute_page}?student_id={sid}` | 原卷对照；原文件绝对页号从学生 `start + 相对page` 获得 |
+
+选参考卷使用批次 `batch.students` 中真实学生卷，不是尚未生成的 `analysis.students` 结果列表。页面某个 analysis students 为空不能证明没有可选卷或平台故障；以批次、当前阶段和真实响应查明。
 
 业务详情路由为当前 origin 的 `/exams/{bid}/analysis`，只在确认本次 bid 存在且有权访问后提供。同步后平台链接必须从同步响应取，不用此路由冒充错题本链接。
 
@@ -44,7 +46,11 @@
 3. `PATCH B/roster/{paper_id}` body：`{revision,student_id}`，解除关联为 null；每次读取返回的新 roster revision。扫描学生 ID/试卷 ID 与课堂学生 ID 不能混用。
 只有姓名/身份已取得明确证据且需要修复时使用以下接口；姓名模糊或未识别默认暂留，不为填齐名单反复 OCR、追问或猜人。身份姓名与关联一起修复时，先 `GET B` 取对应 `students[].revision`，再 `GET B/roster` 取实时 roster revision；`analysis.students` 不提供身份编辑所需 revision。`PATCH B/students/{sid}?include_roster=true` body 使用 `{identity_only:true,revision:试卷当前revision,name:经核验的姓名,name_confirmed:true,results:[],roster_revision:实时名单revision,roster_student_id:精确课堂学生id}`。roster_revision 与 roster_student_id 必须同时提供；扫描模式不能使用该接口改批改结果。成功响应含保存后的 student 与 roster，后续操作采用新的版本并回读确认真实 student_id 关联；多份顺序保存，不能并发复用同一个名单版本。422 必须读取 detail 并修正必填字段或格式，409 回读版本；HTTP 返回、显示名变化或本地表单更新本身不证明关联持久化成功。身份修复须有明确卷面与真实名单证据；模糊姓名不继续追加识别，保留未确认/未关联，集中报告份号、原 PDF 页码区间、实际可见特征与业务定位，疑似局部文字只标疑似，不凭剩余名单猜测。
 
-4. 初次参考卷按主文规则，从本批前几份 `students` 的少量同卷候选中优先选正确率较高的合格卷；快速批改已有全批真实可靠正确率时，直接选现成结果中的合格最高者；无全批现成正确率时，仅在前几份候选中轻量比较选最高，不为选卷另行识别全批。并列以清晰完整或靠前优先。先预览确认清晰、完整、题序版式一致；最高者不合格则用合格最高者并说明。可靠既有正确率可直接用，无则仅粗比可辨教师批注并标明估计，不把未批当正确，不为比较先识别/重批全批。不能把课堂 student_id 当试卷 id；用户快速批改术语与 `scan_fast` 是否同义，先核实当前平台实际模式，不据此改成普通 grading。`POST B/analysis` 必须发送 JSON body `{reference_student_id: 所选本批真实学生卷id}` 触发预切，之后轮询；未有 draft 且未保存参考卷时空 body 会 409“请先选择标准卷，再开始预切”。已有任务先读状态并沿用当前 reference_student_id，不重复启动或仅因发现更高正确率而换参考卷、重开全批；用户明确要求更换时，通过当前参考卷入口按真实契约与影响处理。`status`、`stage`、`scan_phase` 来自真实响应；常见 `awaiting_frames` → `frames_confirmed`/整理中 → `awaiting_confirmation` → `catalog_confirmed`/学生处理中 → `completed` 或 `partial`，自动流程可能跳过部分等待阶段。部分完成不等于全员完成，结合学生状态、issues 和 stale 验证。
+4. 初次参考卷按主文规则，从本批前几份 `students` 的少量同卷候选中优先选正确率较高的合格卷；快速批改已有全批真实可靠正确率时，直接选现成结果中的合格最高者；无全批现成正确率时，仅在前几份候选中轻量比较选最高，不为选卷另行识别全批。并列以清晰完整或靠前优先。先预览确认清晰、完整、题序版式一致；最高者不合格则用合格最高者并说明。可靠既有正确率可直接用，无则仅粗比可辨教师批注并标明估计，不把未批当正确，不为比较先识别/重批全批。不能把课堂 student_id 当试卷 id；用户快速批改术语与 `scan_fast` 是否同义，先核实当前平台实际模式，不据此改成普通 grading。`POST B/analysis` 必须发送经标准 JSON 序列化的对象 body `{reference_student_id: 所选本批真实学生卷id}` 触发预切，之后轮询；未有 draft 且未保存参考卷时空 body 会 409“请先选择标准卷，再开始预切”。已有任务先读状态并沿用当前 reference_student_id，不重复启动或仅因发现更高正确率而换参考卷、重开全批；用户明确要求更换时，通过当前参考卷入口按真实契约与影响处理。`status`、`stage`、`scan_phase` 来自真实响应；常见 `awaiting_frames` → `frames_confirmed`/整理中 → `awaiting_confirmation` → `catalog_confirmed`/学生处理中 → `completed` 或 `partial`，自动流程可能跳过部分等待阶段。部分完成不等于全员完成，结合学生状态、issues 和 stale 验证。
+
+## 标准卷选择错误的精确诊断
+
+2026-11-03 核对的本地 backend/app.py 源码中（未经线上验证），422 原文“标准卷选择格式无效”仅在 JSON 解析失败或解析后的 body 非对象时触发；参考卷 ID 不存在会走另一条错误。先核对请求序列化/传输和原始 detail，不猜 reference_student_id 的替代键名，不据此推定平台故障。优先使用内置 CLI 或 emit 脚本的 JSON.stringify 请求，保留真实 method/path/status/message；线上契约不同时核实实际响应并按页面处理。
 
 ## 题框与标准目录
 
@@ -65,7 +71,7 @@
 
 改框会换 `frame_revision` 并可能清除受影响页的 checked 标记；使用保存响应的新版本。`POST B/analysis/frames/confirm` body `{frame_revision}` 确认并启动整理。只在 `awaiting_frames` 可直接改框；冻结后用页面“返回修改题框”或 `POST .../frames/reopen` 并传当前 frame_revision。其他已核查 action 有 relocate、cancel、reference、retry、retry-precut、retry-catalog；不同 action 所需参数不同，不作为通用重试接口盲用。`retry-precut` 需要当前 frame_revision 和失败相对 page。冲突可能带 `X-Error-Code: frame_version_conflict`，必须回读再编辑。
 
-待确认标准目录：`PATCH B/analysis/catalog` body `{frame_revision,catalog_revision,questions}`。questions 保留真实完整对象与稳定 id、来源、内容 schema、媒体及几何，不凭题干文本重造整套字段；编辑器结构复杂时用当前页面“拆开组合题”“编辑内容”完成。每次保存都会产生新的 catalog_revision。
+待确认标准目录：`PATCH B/analysis/catalog` body `{frame_revision,catalog_revision,questions}`。questions 保留真实完整对象与稳定 id、来源、内容 schema、媒体及几何，不凭题干文本重造整套字段；编辑器结构复杂时用当前页面“拆开组合题”“编辑内容”完成。每次保存都会产生新的 catalog_revision。保存后实际复核并读取新版本，CLI catalog --plan 可回读完整真实 questions 完成已审目录确认，agent 不必复制富题对象；它不执行目录编辑，不提交课堂。
 
 **新版确认范围**：若批次 `analysis_confirmation_version == 2`，`POST B/analysis/confirm` 被拒绝；按真实页面使用：
 

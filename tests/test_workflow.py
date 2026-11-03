@@ -258,6 +258,104 @@ test('sequential response edits propagate returned token without another full re
  const d=await main(input('responses',{plan:w.responsePlan}));assert(d.ok);assert.equal(w.responseWrites.length,2);assert.notEqual(w.responseWrites[0].review_token,w.responseWrites[1].review_token);
 });
 
+function reply(value,status=200){return {ok:status<400,status,headers:{get:()=>null},json:async()=>clone(value)};}
+test('initial reference candidates use uploaded papers even when analysis students are empty',async()=>{
+ const w=world();w.a.status='not_generated';w.a.students=[];
+ const d=await main(input('run'));assert.equal(d.result.outcome,'needs_reference');assert.equal(d.result.papers,2);
+ assert.equal(d.result.candidates[0].pages[0],location.origin+B+'/pages/0?original=true&student_id=p1');assert.equal(w.starts,0);
+});
+test('reference selection sends exactly one JSON object with correct content type',async()=>{
+ const w=world();w.a.status='not_generated';const old=global.fetch;let attempts=0;
+ global.fetch=async(path,o)=>{if(path===B+'/analysis'&&o.method==='POST'){
+  attempts++;assert.equal(o.headers['Content-Type'],'application/json');assert.equal(typeof o.body,'string');
+  assert.deepEqual(JSON.parse(o.body),{reference_student_id:'p1'});
+ }return old(path,o);};
+ const d=await main(input('run',{plan:{reference_student_id:'p1'}}));assert(d.ok);assert.equal(attempts,1);assert.equal(d.result.outcome,'needs_frame_review');
+});
+test('malformed JSON detail is not misreported as invalid reference or retried with other fields',async()=>{
+ const w=world();w.a.status='not_generated';const old=global.fetch;let attempts=0;
+ global.fetch=async(path,o)=>path===B+'/analysis'&&o.method==='POST'?(attempts++,reply({detail:'标准卷选择格式无效'},422)):old(path,o);
+ const d=await main(input('run',{plan:{reference_student_id:'p1'}}));assert(!d.ok);assert.equal(d.error.code,'invalid_json_body');
+ assert.equal(d.error.next_action,'verify_json_transport');assert.equal(d.error.retryable,false);assert.equal(attempts,1);
+});
+test('actual invalid paper error remains distinct from malformed JSON',async()=>{
+ const w=world();w.a.status='not_generated';const old=global.fetch;
+ global.fetch=async(path,o)=>path===B+'/analysis'&&o.method==='POST'?reply({detail:'请选择本次上传的一份学生卷'},422):old(path,o);
+ const d=await main(input('run',{plan:{reference_student_id:'p1'}}));assert.equal(d.error.code,'validation_failed');assert.equal(d.error.message,'请选择本次上传的一份学生卷');
+});
+test('reviewed unchanged frames confirm with zero PATCH operations',async()=>{
+ const w=world(),p=plan(w);p.operations=[];p.expected_leaf_labels=['1','2'];
+ const d=await main(input('run',{plan:{frames:p}}));assert(d.ok&&d.result.ready);assert.equal(w.patches,0);
+ assert.equal(w.trace.filter(([m,p])=>m==='POST'&&p.endsWith('/frames/confirm')).length,1);
+});
+function catalogWorld(){
+ const w=world();w.finish();w.a.status='awaiting_confirmation';w.a.catalog_revision='c1';w.batch.analysis_confirmation_version=2;
+ w.batch.name='Test';w.batch.name_revision=3;
+ w.a.questions[0].content={elements:[{type:'richText',content:{text:'actual',html:'preserve_html',json:{stable:'payload'}}}]};
+ const old=global.fetch;w.catalogCalls=[];
+ global.fetch=async(path,o)=>{
+  if(path===B+'/merge-preflight'){
+   const b=JSON.parse(o.body);assert.deepEqual(b.source_ids,[]);w.catalogCalls.push([path,b]);
+   return reply({operation_id:'server-op',preflight_token:'transient-business-token',versions:{test:{version:1}},duplicates:w.duplicates||[]});
+  }
+  if(path===B+'/analysis/confirm-and-start'||path===B+'/analysis/confirm'){
+   const b=JSON.parse(o.body);w.catalogCalls.push([path,b]);
+   if(w.confirmTimeout)throw Error('connection lost');
+   w.a.status='completed';return reply({status:'accepted',operation_id:'server-op'});
+  }
+  return old(path,o);
+ };
+ w.catalogPlan={operation_id:'catalog-review-1',source_pdf_sha256:w.a.source_pdf_sha256,reference_student_id:'p1',
+  frame_revision:w.a.frame_revision,catalog_revision:'c1',reference_reviewed:true,scope_reviewed:true,catalog_reviewed:true,
+  reviewed_pages:[0],expected_leaf_labels:['1','2']};
+ return w;
+}
+test('a no-edit review cannot approve failed or empty precut output',async()=>{
+ const w=world(),p=plan(w);p.operations=[];w.a.localization_failed_pages=[0];
+ let d=await main(input('frames',{plan:p,confirm:true}));assert.equal(d.error.code,'precut_recovery_required');
+ w.a.localization_failed_pages=[];w.a.frames=[];
+ d=await main(input('frames',{plan:p,confirm:true}));assert.equal(d.error.code,'precut_recovery_required');
+ assert(w.trace.every(([m])=>m==='GET'));
+});
+test('v2 reviewed catalog advances to ready without copying rich questions through the agent plan',async()=>{
+ const w=catalogWorld();const d=await main(input('run',{plan:{catalog:w.catalogPlan}}));assert(d.ok&&d.result.ready);
+ assert.equal(w.catalogCalls.length,2);const sent=w.catalogCalls[1][1];
+ assert.deepEqual(sent.questions,w.a.questions);assert.equal(sent.questions[0].content.elements[0].content.html,'preserve_html');
+ assert.equal(sent.name_revision,3);assert.deepEqual(sent.source_versions,{test:{version:1}});assert.equal(d.result.submitted,false);
+ assert(!w.trace.some(([m,p])=>m==='POST'&&p.endsWith('/imports')));assert.equal(d.result.visual_review_performed,true);
+ assert.equal(w.trace.filter(([m,p])=>m==='GET'&&p===B).length,1);
+ assert(!JSON.stringify(d.checkpoint).includes('transient-business-token'));
+});
+test('unreviewed or changed catalog version cannot be confirmed',async()=>{
+ const w=catalogWorld();w.catalogPlan.catalog_revision='old';let d=await main(input('catalog',{plan:w.catalogPlan}));
+ assert.equal(d.error.code,'catalog_review_required');assert.equal(w.catalogCalls.length,0);
+ w.catalogPlan.catalog_revision='c1';w.catalogPlan.catalog_reviewed=false;d=await main(input('catalog',{plan:w.catalogPlan}));
+ assert.equal(d.error.code,'catalog_review_required');assert.equal(w.catalogCalls.length,0);
+});
+test('duplicate students stop scope confirmation without selecting a paper or submitting',async()=>{
+ const w=catalogWorld();w.duplicates=[{student_id:'11',papers:[{key:'p1'},{key:'p2'}]}];
+ const d=await main(input('run',{plan:{catalog:w.catalogPlan}}));assert.equal(d.result.outcome,'needs_duplicate_review');
+ assert.equal(w.catalogCalls.length,1);assert.equal(d.result.submitted,false);
+});
+test('catalog confirmation timeout preserves recovery operation and cannot create another preflight',async()=>{
+ const w=catalogWorld();w.confirmTimeout=true;const d=await main(input('catalog',{plan:w.catalogPlan}));assert(!d.ok);
+ assert.equal(d.error.code,'transport_uncertain');assert.equal(d.checkpoint.catalog_receipt.server_operation_id,'server-op');
+ const before=w.catalogCalls.length;const retry=await main(input('catalog',{plan:w.catalogPlan,checkpoint:d.checkpoint}));
+ assert(retry.ok);assert.equal(retry.result.outcome,'needs_confirmation_recovery');assert.equal(w.catalogCalls.length,before);
+});
+test('old confirmation is used only when the deployed version permits it',async()=>{
+ const w=catalogWorld();delete w.batch.analysis_confirmation_version;const d=await main(input('catalog',{plan:w.catalogPlan}));
+ assert(d.ok);assert.equal(w.catalogCalls.length,1);assert.equal(w.catalogCalls[0][0],B+'/analysis/confirm');
+});
+test('catalog granularity mismatch is detected before a preflight or confirmation write',async()=>{
+ const w=catalogWorld();w.catalogPlan.expected_leaf_labels=['1'];const d=await main(input('catalog',{plan:w.catalogPlan}));
+ assert.equal(d.error.code,'business_split_mismatch');assert.equal(w.catalogCalls.length,0);
+});
+test('catalog replay with changed source cannot claim current review',async()=>{
+ const w=catalogWorld();const d=await main(input('catalog',{plan:w.catalogPlan}));w.a.source_pdf_sha256='new-source';
+ const retry=await main(input('catalog',{plan:w.catalogPlan,checkpoint:d.checkpoint}));assert.equal(retry.error.code,'source_changed');assert.equal(w.catalogCalls.length,2);
+});
+
 (async()=>{let failed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+' '+e.message);}}console.log(JSON.stringify({tests:tests.length,passed:tests.length-failed,failed}));process.exitCode=failed?1:0;})();
 '''
 

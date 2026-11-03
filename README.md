@@ -1,33 +1,35 @@
 # scan-marked-papers
 
-v1.6.0：试卷批改、扫描与整理技能，支持新卷快速批改、智能批改、已批教师卷扫描，以及从已有记录链接接着做。本版增加 WorkBuddy ZIP 试用说明和可选 Agent Browser CLI 后端；优先使用当前产品已有浏览器与同源接口，没有 CLI 时按真实页面继续。
+v1.7.0：老师交 PDF 或已有批阅台链接，即可由智能体推进扫描/批改后的整理和真实同步检查。新增批次链接入口、可交现有浏览器 evaluate 的自包含脚本、离线结果回收、已审目录确认和精确错误诊断。本版通过仓库 main 的 ZIP 分发。
 
-默认只完成同步检查，交付批阅台链接，不提交课堂；只有本次明确要求实际同步才进入原同步流程。统计准确、题目准确优先，严格核对参考图，独立计算式逐题拆成可订正单题。学生个人图按风险处理，全量准确性深审由老师另选。看不清的姓名暂留未关联，完成后集中报告试卷份号、页码与实际可见特征，不猜人。
+默认完成同步检查并返回批阅台链接，尚不提交课堂；只有本次明确要求同步才执行实际导入。统计准确、题目准确优先，严格审查标准题来源，独立计算式拆为分别可订正的单题。学生个人图按异常修复；姓名看不清暂留未关联，不猜人。实际 blocker 和覆盖不足如实报告，不以部分范围冒充全批通过。
 
 ## 安装与更新
 
-从本仓库 **main** 下载 v1.6.0 [scan-marked-papers.zip](https://github.com/leondasdasdasd/scan-marked-papers/blob/main/scan-marked-papers.zip)。WorkBuddy 按官方入口“专家·技能·连接器 → 技能 → 添加技能 → 上传技能”上传该 ZIP；不保证在对话里贴 GitHub 链接即可安装自有包。详细接入与官方来源见 [office-agents.md](references/office-agents.md)。
+从仓库 main 获取 v1.7.0 [scan-marked-papers.zip](https://github.com/leondasdasdasd/scan-marked-papers/blob/main/scan-marked-papers.zip)。本轮不创建 GitHub Release，[GitHub Releases](https://github.com/leondasdasdasd/scan-marked-papers/releases) 中旧发布请勿与本版混用；检查最新版本以已核实官方 main 的 [SKILL.md](https://github.com/leondasdasdasd/scan-marked-papers/blob/main/SKILL.md) 元信息及对应提交为准。下载后核对包内 metadata.version 与来源提交，导入或安装后回读实际版本，不以文档标题认定安装成功。
 
-已有本地技能目录的工具可按自身规范安装；例如 Codex 解压到 `~/.codex/skills/` 并保留 `scan-marked-papers/` 目录。安装前备份旧目录、保留本地修改；导入或安装后核对实际 `SKILL.md` 的 `metadata.version` 为 `1.6.0`。WorkBuddy 不以安装 Codex、Docker 或云主机 wrapper 为前提。
+WorkBuddy 使用“专家·技能·连接器 → 技能 → 添加技能 → 上传技能”导入 ZIP；不保证对话粘贴 GitHub 链接即可安装。已有本地技能目录的工具按自身规范安装，例如 Codex 保留解压后的 scan-marked-papers/ 目录。安装前备份旧目录、保留本地修改；只查看更新不自动下载安装。细节见 [技能更新流程](references/skill-update.md) 和 [办公接入说明](references/office-agents.md)。
 
-本版安装包位于仓库 **main**；[GitHub Releases](https://github.com/leondasdasdasd/scan-marked-papers/releases) 中的旧发布不是 v1.6.0，请勿混用。更新流程见 [skill-update.md](references/skill-update.md)，只查看版本不等于安装，不自动更新。豆包办公、千问办公尚未核实自定义完整包的导入/执行契约，也未实测；只能按其当前实际工具能力接入，Qwen Code 的能力不能代替千问办公。
+## 使用与执行路径
 
-## 使用与依赖
+把 PDF 交给智能体说“帮我传一下”，或给已有批阅台链接说“接着做到同步检查”。新未批卷需明确快速/智能模式；智能批改需要等长答案卷。使用真实有权访问的批阅台账号、学校与课程/班级，复用实际连接的登录页面，不导出认证材料；新卷无指定地址时使用 https://piyue.yungu.org，先核实环境，不凭域名称生产。
 
-把 PDF 交给智能体说“帮我传一下”，或给已有批阅台链接说“接着做到同步检查”。已有链接由智能体提取 origin；新卷未指定地址时使用 `https://piyue.yungu.org`，先核实真实环境、身份与学校，不凭域名称生产，不让老师填写 CLI 参数。新未批卷需明确快速/智能模式；智能批改需要等长答案卷。使用自己的批阅台账号与对应课程、班级权限，复用实际连接的已授权登录会话，不导出 Cookie、令牌或 storage state，不关闭用户原有页面。
+新 PDF 用产品现有文件工具/页面上传，取得批次后，scan 优先内置 CLI：
 
-新 PDF 先用产品原生文件工具/页面上传，取得批次后再接可用 CLI。CLI 是可选路径：已有 Python 时可选 `--browser-backend playwright|agent-browser`，默认 playwright 保持兼容；Agent Browser 后端要求现有可执行文件支持 `eval --stdin`、`--session` 和所需 JSON 响应，且实际连接授权会话，不会自动接管用户 Chrome。没有兼容后端就使用原生浏览器，不擅装 Agent Browser、插件或运行时。缺能力时一次说明可执行接入方式或真实阻塞，不反复索要技术参数。CLI 使用 Python 标准库；本地生成全参考页和接触表另需 `pymupdf`、`Pillow`，也可使用产品已有看图工具。完整契约见 [cli.md](references/cli.md)。
+- 有兼容浏览器后端和实际会话：用 --batch-url 直接传记录链接，run --follow 有界跟进到审图/目录/阻塞/终点。
+- 无兼容后端、但现有工具能执行命令和浏览器 evaluate：--emit-script 生成自包含 JS，交目标授权页面原样执行；完整业务结果保存后 collect 回存 checkpoint/output。生成不是执行，emit 只有单轮预算；不另拼 fetch、不猜字段/路由。
+- 无 evaluate：按真实页面继续。缺能力时给已核实的接入方法或具体恢复点，不要求老师填写技术参数，不擅装 Agent Browser、插件、Codex、Docker 或运行时。
 
-新版 CLI 当前仅支持 `workflow_mode=scan`。优先用 `run --follow` 在有界时间内跟进等待，直到需要审图、目录校对、阻塞处理或到达终点；默认输出紧凑摘要，全局 `--output` 保存完整 JSON，必要时用 `--verbose` 查看完整输出。一次生成的校对包和精简目录可复用，避免反复读取大响应。
+主 CLI 使用 Python 标准库，正常浏览器后端支持已有 playwright 或兼容 agent-browser，均需真实已登录会话。全参考页校对包渲染另需 pymupdf/Pillow，也可用现有看图工具。CLI 不自动审图、不登录、不接管 Chrome；完整入口与计划见 [CLI 编排](references/cli.md)。
 
-预切失败通过 `diagnose` 集中诊断；完成阶段的 review_tasks 按卷、题和页码组织阻塞，再用 `evidence` 获取必要的目录与作答证据定位。实际审卷后，可用 `responses --plan` 定点修复作答结构：选择位置映射到真实稳定选项 ID，逐空作答按真实空位对应，保留教师判定；不调用模型，不自动猜答案。已有父子框可在审图后显式提升为独立题。校对包或确认标记本身不代表已完成视觉验收。
+预切正常且有非空题框、实际审过全部参考页后，无修改可零 PATCH 直接确认；预切失败/空框不能这样批准。目录修改仍用真实接口/页面保存，catalog --plan 只确认已审目录与本批范围，不提交课堂；有重复卷先返回审查边界。已审作答结构可定点修复，保留教师原判。checkpoint 是有限恢复记录，不是服务端 exactly-once；超时或部分失败先回读，不重放整包。
 
-grading 的批改、目录内容保存/确认及 CLI 未支持的恢复步骤仍走原接口/页面；CLI 不自动处理所有工作流，也不提交导入。客户端检查点与顺序修复不是服务端 exactly-once 或跨请求事务；超时或部分失败先回读已保存状态，再处理剩余范围，不重放整包动作。
+grading 的快速/智能批改、目录编辑及未支持步骤沿用真实接口/页面。WorkBuddy 有官方 ZIP 导入路径；豆包办公、千问办公未核实完整包导入/执行契约，Qwen Code 不代表千问办公能力，均按当次工具实际接入。
 
-## 验证与速度边界
+## 验证边界
 
-v1.6.0 完成浏览器后端适配与文档更新，通过 4 项隔离子进程适配测试、39 项既有合成 CLI 回归及 3 项输出/follow 检查。子进程测试不是真浏览器，本轮未安装 Agent Browser，未完成 WorkBuddy 实机实卷联调；豆包办公、千问办公也未实测。可导入试用不等于这些产品已全流程验收。
+v1.7.0通过65项验证：52项 JS 状态/业务行为、4项浏览器后端子进程适配、3项输出/follow、5项 emit/collect/离线渲染入口，以及1项本地 HTTP 隔离全链路。HTTP 验证使用23份合成卷、6道独立题、138条结果，经过参考卷、拆题、目录v2确认的3个审查边界，完成全批 ready；零模型调用。新增离线真实 PDF 校对包渲染及错 SHA 拒绝检查。这验证确定性编排与边界，不代表视觉审核、识别质量、真实登录或线上速度。
 
-历史 v1.5.0 曾完成 24 份、288 条作答的真实全批 ready 检查，耗时 8 分 58 秒；该次复用旧身份关联，不是严格前后对照，不能据此推断本版或办公产品耗时。此前真实目录离线输出由 72,346 降至 7,749 字符（89.29%），也只代表输出量，不代表 token 降幅或整体提速。课堂实际导入与学生订正仍未验证；快速/智能批改不在本版 CLI 支持范围。结构统计一致不等于全量判断准确，检查未通过或未关联范围必须如实报告。
+本轮未完成 WorkBuddy、豆包办公、千问办公实机实卷验收；未验证课堂实际导入及学生订正，未修改或部署应用前后端。历史真实批次结果不能代替本版办公产品或端到端速度证据，不承诺5分钟或固定token节省。结构统计一致不等于全部判断准确。
 
 仓库不包含账号凭证、试卷或学生数据。
