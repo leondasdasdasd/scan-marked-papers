@@ -1,18 +1,31 @@
 # 批量 CLI 编排
 
-本说明对应 `scripts/paperflow.py`、`paperflow.js` 与兼容 `paperflow_base.py`。实际 `workflow_mode=scan` 且具备可用浏览器 run-code 适配器时优先使用；不支持的阶段按原技能接口/页面回退。默认终点为真实全批同步检查，不提交导入；已有导入与停止标记优先只读。
+本说明对应 `scripts/paperflow.py`、`paperflow.js` 与兼容 `paperflow_base.py`。实际 `workflow_mode=scan` 且已有可用浏览器执行后端时优先使用；没有 CLI 或不支持当前阶段时使用产品原生浏览器与真实接口/页面。默认终点为真实全批同步检查，不提交导入；已有导入与停止标记优先只读。办公产品的导入与能力边界见 [office-agents.md](office-agents.md)。
 
 ## 入口与输出
 
-Python 全局参数放在子命令前：`--base-url <已核实 origin>`、`--batch-id <本批 ID>`、`--browser-session <已登录会话>` 均必需。可选 `--wrapper`（默认 `~/.codex/skills/playwright/scripts/playwright_cli.sh`）、`--timeout`（1–180 秒，默认 45）、`--interval`（2–30 秒，默认 5）、`--checkpoint <本地 JSON>`、`--output <完整结果 JSON>` 和 `--verbose`。先核实真实身份、学校与环境；CLI 通过 wrapper 在浏览器同源 fetch，不导出凭证、不自行登录或关闭用户页面，禁止重定向。
+以下参数由智能体获取和填写，不交给老师配置。Python 主入口全局参数放在子命令前：`--batch-id <本批 ID>`、`--browser-session <实际已登录会话>` 必需；`--base-url` 可省略，默认 `https://piyue.yungu.org`，已有链接则使用经核实的 origin。默认地址只用于路由，不证明生产环境；执行前核实真实身份、学校与环境，页面不在目标同源时停止，不跟随重定向。
+
+`paperflow.py` 与兼容入口 `paperflow_base.py` 均可选择 `--browser-backend playwright|agent-browser`，默认 playwright 保持原有用法：
+
+| 后端 | 现有能力要求 |
+| --- | --- |
+| `playwright` | 已有可用的 run-code / page.evaluate 适配器；`--wrapper` 默认 `~/.codex/skills/playwright/scripts/playwright_cli.sh`，可指向现有兼容入口。此路径不是其他办公产品的安装前提 |
+| `agent-browser` | 已有命令可执行文件，支持 `--session <会话> --json eval --stdin`，且该 session 实际连接用户授权的已登录页面；`--browser-executable <路径>` 默认 agent-browser。产品提供点击/截图能力不等于满足此契约，未满足时使用原生浏览器 |
+
+CLI 在上述实际会话内执行同源请求，不自动接管 Chrome、不自动登录、不读取或导出 Cookie/令牌/storage state，也不安装浏览器、插件或运行时。`--browser-session` 由智能体从当前可用连接获取，不能把任意会话名当作已连接；工具缺失时不要求老师补 CLI 参数或安装 Codex/Docker/wrapper。
+
+agent-browser 后端通过 stdin 传入脚本，要求工具返回 `success:true`、data.result 为含布尔 ok 的对象；失败或待确认响应不能当成功。该契约仅决定适配器能否执行，不证明已登录、同源或已完成业务检查。
+
+其他可选参数为 `--timeout`（1–180 秒，默认 45）、`--interval`（2–30 秒，默认 5）、`--checkpoint <本地 JSON>`、全局 `--output <完整结果 JSON>` 和 `--verbose`。下例由智能体在已确认该后端可用时执行，占位符均替换为实际值：
 
 ```bash
-python3 <技能目录>/scripts/paperflow.py --base-url <真实origin> --batch-id <真实ID> --browser-session <已有会话> --checkpoint <本次检查点.json> --output <本次结果.json> run --follow --max-seconds 600
+python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --batch-id <真实ID> --browser-backend agent-browser --browser-session <实际已登录会话> --checkpoint <本次检查点.json> --output <本次结果.json> run --follow --max-seconds 600
 ```
 
 默认 stdout 为紧凑 JSON，省去完整 checkpoint、调用明细与大块校对几何，保留下一步所需的摘要和文件路径。全局 `--output` 保存完整结果 envelope，返回 output_file；只有诊断确实需要时用 `--verbose` 输出完整 JSON。兼容的 `snapshot --output <JSON>` 放在子命令后，只保存裸 snapshot 并返回 snapshot_file，与全局输出不同。完整结果保存在本次受控目录，按需读取字段，不整份回送模型。`--timeout` 是一次轮询预算，`run --follow --max-seconds` 是跨 waiting 的有界跟进预算，均不是服务端任务完成承诺。
 
-所有命令的 `ok`/退出码只说明工具执行，业务完成看 `outcome`、`ready`、`submitted` 和真实覆盖。新入口没有 `upload/session/watch`；新上传、grading 与目录保存/确认仍按原技能。旧 `paperflow_base.py` 的 session/upload/check 按它自己的 help 使用，不能混用参数；旧 upload 也仅支持 scan。
+所有命令的 `ok`/退出码只说明工具执行，业务完成看 `outcome`、`ready`、`submitted` 和真实覆盖。主入口没有 `upload/session/watch`；新上传、grading 与目录保存/确认仍按原技能。新 PDF 使用产品原生文件工具/页面上传，获得 batch 后再接 CLI；没有可用上传能力时一次报告接入方法或真实阻塞。兼容 `paperflow_base.py` 的 session/upload/check 按自身 help 使用；upload 仍仅 scan，且 agent-browser 后端会返回 `upload_requires_native_browser_file_tool`，不会读取文件或假造上传成功。
 
 | 命令 | 用途与边界 |
 | --- | --- |

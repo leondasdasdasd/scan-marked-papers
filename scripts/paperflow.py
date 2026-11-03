@@ -30,7 +30,8 @@ def execute(args,action,plan=None,checkpoint=None):
         raise ValueError('checkpoint_origin_or_batch_mismatch')
     payload={'action':action,'origin':args.base_url,'batch':args.batch_id,'timeout':args.timeout,
              'interval':args.interval,'checkpoint':checkpoint,'plan':plan,'confirm':getattr(args,'confirm',False)}
-    result=base.browser(args,'async(page)=>await page.evaluate(('+source()+'),'+json.dumps(payload,ensure_ascii=False)+')')
+    expression='('+source()+')('+json.dumps(payload,ensure_ascii=False)+')'
+    result=base.browser(args,'async(page)=>await page.evaluate(('+source()+'),'+json.dumps(payload,ensure_ascii=False)+')',expression)
     if args.checkpoint and result.get('checkpoint'):atomic_json(args.checkpoint,result['checkpoint'])
     return result
 
@@ -92,9 +93,10 @@ def render_bundle(metadata,pdf_path,out):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base-url',required=True);parser.add_argument('--batch-id',required=True)
+    parser.add_argument('--base-url',default=base.DEFAULT_ORIGIN);parser.add_argument('--batch-id',required=True)
     parser.add_argument('--browser-session',required=True)
     parser.add_argument('--wrapper',default=str(Path.home()/'.codex/skills/playwright/scripts/playwright_cli.sh'))
+    base.browser_options(parser)
     parser.add_argument('--timeout',type=int,default=45);parser.add_argument('--interval',type=int,default=5)
     parser.add_argument('--checkpoint',type=Path)
     parser.add_argument('--output',type=Path)

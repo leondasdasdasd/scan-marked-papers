@@ -142,8 +142,35 @@ JS = r"""async (input) => {
 }"""
 
 
-def browser(args, code):
+DEFAULT_ORIGIN = 'https://piyue.yungu.org'
+
+
+def browser_options(parser):
+    parser.add_argument('--browser-backend', choices=('playwright','agent-browser'), default='playwright')
+    parser.add_argument('--browser-executable', default='agent-browser')
+
+
+def browser(args, code, expression=None):
     started = time.perf_counter()
+    if getattr(args, 'browser_backend', 'playwright') == 'agent-browser':
+        if expression is None:
+            return {'ok':False,'error':{'code':'upload_requires_native_browser_file_tool'}}
+        proc = subprocess.run([args.browser_executable, '--session', args.browser_session,
+                               '--json', 'eval', '--stdin'], input=expression,
+                              capture_output=True, text=True, timeout=args.timeout+65)
+        try:
+            envelope=json.loads(proc.stdout)
+            if not isinstance(envelope,dict):
+                raise ValueError('invalid envelope')
+            if proc.returncode or envelope.get('success') is not True:
+                return {'ok':False,'error':{'code':'browser_command_failed'}}
+            data=envelope['data']['result']
+            if not isinstance(data,dict) or type(data.get('ok')) is not bool:
+                raise ValueError('invalid result')
+        except (ValueError,KeyError,TypeError):
+            return {'ok':False,'error':{'code':'invalid_browser_response'}}
+        data['wall_seconds']=round(time.perf_counter()-started,3)
+        return data
     proc = subprocess.run([args.wrapper, '-s='+args.browser_session, 'run-code', code],
                           capture_output=True, text=True, timeout=args.timeout+65)
     match = re.search(r'### Result\s*\n(.*?)(?=\n### |\Z)', proc.stdout, re.S)
@@ -159,10 +186,11 @@ def browser(args, code):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--base-url',required=True)
+    p.add_argument('--base-url',default=DEFAULT_ORIGIN)
     p.add_argument('--batch-id',default='')
     p.add_argument('--browser-session',required=True)
     p.add_argument('--wrapper',default=str(Path.home()/'.codex/skills/playwright/scripts/playwright_cli.sh'))
+    browser_options(p)
     p.add_argument('--timeout',type=int,default=45)
     p.add_argument('--interval',type=int,default=5)
     sub=p.add_subparsers(dest='action',required=True)
@@ -207,7 +235,8 @@ def main():
         }'''
     else:
         code='async(page)=>await page.evaluate(('+JS+'),'+json.dumps(payload,ensure_ascii=False)+')'
-    try:data=browser(args,code)
+    expression=None if args.action=='upload' else '('+JS+')('+json.dumps(payload,ensure_ascii=False)+')'
+    try:data=browser(args,code,expression)
     except (OSError,subprocess.TimeoutExpired):data={'ok':False,'error':{'code':'transport_timeout_read_state_before_retry'}}
     print(json.dumps(data,ensure_ascii=False))
     return 0 if data.get('ok') else 1
