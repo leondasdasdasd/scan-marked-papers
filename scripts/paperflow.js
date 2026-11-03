@@ -5,6 +5,7 @@ async (input) => {
   let receipt=input.checkpoint?.frame_receipt||null;
   let associations=input.checkpoint?.association_receipt||null;
   let catalogReceipt=input.checkpoint?.catalog_receipt||null;
+  let authReceipt=input.checkpoint?.auth_receipt||null;
   const clone=x=>JSON.parse(JSON.stringify(x));
   const fail=(code,details={})=>{throw Object.assign(new Error(code),{code,details});};
   if(location.origin!==input.origin)return {ok:false,error:{code:'origin_mismatch'}};
@@ -27,7 +28,10 @@ async (input) => {
         response.status===403?'permission_denied':response.status===422?'validation_failed':
         [404,405].includes(response.status)?'contract_mismatch':response.status===429?'rate_limited':'api_failed';
       if(response.status===422&&message==='标准卷选择格式无效')code='invalid_json_body';
-      const next={invalid_json_body:'verify_json_transport',validation_failed:'inspect_validation_detail',
+      const classroomAuth=response.status===428&&(serverCode==='classroom_login_required'||serverCode==='GATEWAY_AUTHORIZATION'||
+        /云谷登录已失效|课堂会话已失效|课堂登录已失效|云谷账号与当前批阅台账号不一致|学校 AI 登录(?:已失效|已退出|身份已变化|权限已变化)/.test(message||''));
+      if(classroomAuth)code='classroom_login_required';
+      const next={classroom_login_required:'check_access_then_relogin',invalid_json_body:'verify_json_transport',validation_failed:'inspect_validation_detail',
         version_conflict:'read_current_version',login_required:'restore_authorized_session',
         permission_denied:'verify_identity_scope',contract_mismatch:'verify_deployed_contract',
         rate_limited:'wait_before_reading_state',api_failed:'read_state_before_retry'};
@@ -354,6 +358,74 @@ async (input) => {
     transitions.push({action:'catalog_confirmed',operation_id:catalogReceipt.server_operation_id||null});
     return {outcome:'catalog_confirmation_accepted',operation_id:catalogReceipt.server_operation_id||null,submitted:false};
   }
+  function principal(user){
+    if(!user||!['employee','teacher'].includes(user.identity)||!user.id||!user.school_id)return null;
+    return {user_id:String(user.id),school_id:String(user.school_id),identity:user.identity};
+  }
+  function rememberPrincipal(user){
+    const value=principal(user);if(!value)fail('teacher_identity_required');
+    if(authReceipt?.principal&&JSON.stringify(value)!==JSON.stringify(authReceipt.principal))fail('identity_changed',{
+      next_action:'verify_identity_scope',retryable:false});
+    authReceipt={...authReceipt,principal:value};return value;
+  }
+  async function access(){
+    const session=await api('GET','/api/session?refresh_profile=false&include_models=false');
+    const current=rememberPrincipal(session.user);
+    let check;
+    try{check=await api('GET','/api/classroom/login-check');}
+    catch(error){
+      if(error.code!=='classroom_login_required')throw error;
+      return {outcome:'classroom_login_required',authenticated:true,principal:current,classroom_valid:false,
+        next_action:'relogin',submitted:false};
+    }
+    // The deployed login-check can return HTTP 200 with an embedded authentication failure.
+    const status=check['状态码'];const code=check['错误类型'];const message=check['检查结果']||'';
+    const valid=check['课堂会话']==='有效'&&check['云谷会话']==='有效且账号一致';
+    if(valid){authReceipt.recovery_started=false;return {outcome:'access_verified',authenticated:true,
+      principal:current,classroom_valid:true,submitted:false};}
+    const loginRequired=status===428&&(code==='classroom_login_required'||code==='GATEWAY_AUTHORIZATION'||
+      /云谷登录已失效|课堂会话已失效|课堂登录已失效|学校 AI 登录(?:已失效|已退出|身份已变化|权限已变化)/.test(message));
+    return {outcome:loginRequired?'classroom_login_required':'authentication_unverified',authenticated:true,
+      principal:current,classroom_valid:false,next_action:loginRequired?'relogin':'inspect_authentication_failure',
+      ...(Number.isInteger(status)?{status}:{}),...(typeof code==='string'?{server_code:code}:{}),submitted:false};
+  }
+  async function relogin(){
+    if(authReceipt?.recovery_started)return {outcome:'authentication_recovery_pending',
+      next_action:'finish_login_then_access',submitted:false};
+    if(typeof document!=='undefined'&&document.querySelector('[role="dialog"],dialog[open],textarea:focus,input:focus,[contenteditable="true"]:focus'))
+      return {outcome:'authentication_navigation_deferred',next_action:'preserve_page_edits',submitted:false};
+    // This opt-in command starts the existing deployed forced-login flow. The CAS URL stays in memory.
+    // It does not assume the newer /auth/refresh route has been deployed.
+    if(!authReceipt?.principal){
+      try{const session=await api('GET','/api/session?refresh_profile=false&include_models=false');rememberPrincipal(session.user);}
+      catch(error){if(error.code!=='login_required')throw error;}
+    }
+    const path='/exams/'+input.batch+'/analysis';
+    const login=await api('POST','/api/login?force=true&return_to='+encodeURIComponent(path));
+    let target;try{target=new URL(login.login_url,input.origin);}catch{fail('invalid_login_response');}
+    if(!['http:','https:'].includes(target.protocol)||target.username||target.password||!login.login_url||
+      (new URL(input.origin).protocol==='https:'&&target.protocol!=='https:'))fail('invalid_login_response');
+    authReceipt={...authReceipt,recovery_started:true};
+    setTimeout(()=>location.assign(target.href),250);
+    return {outcome:'authentication_navigation_started',next_action:'finish_login_then_access',submitted:false};
+  }
+  async function roster(){
+    const [batch,r]=await Promise.all([api('GET',B),api('GET',B+'/roster')]);
+    const expected=new Set(batch.students.map(p=>p.id));
+    const complete=r.papers.length===expected.size&&new Set(r.papers.map(p=>p.id)).size===expected.size&&r.papers.every(p=>expected.has(p.id));
+    const unlinked=r.papers.filter(p=>!p.student_id).map(p=>{
+      const paper=batch.students.find(b=>b.id===p.id);const name=typeof p.name==='string'?p.name:'';
+      return {paper_id:p.id,index:p.index,pdf_pages:paper?[paper.start+1,paper.start+batch.pages_per_paper]:null,
+        recognized_name:name,name_confirmed:p.name_confirmed===true,status:p.status,
+        exact_name_candidates:name?(r.students||[]).filter(s=>s.name===name).map(s=>({id:s.id,name:s.name})):[],
+        evidence_confirmed:false,
+        pages:paper?Array.from({length:batch.pages_per_paper},(_,i)=>input.origin+B+'/pages/'+(paper.start+i)+
+          '?original=true&student_id='+encodeURIComponent(p.id)):[]};
+    });
+    return {outcome:!complete?'roster_coverage_gap':unlinked.length?'identity_pending':'identities_linked',revision:r.revision,
+      papers:expected.size,linked:r.papers.filter(p=>p.student_id).length,roster_coverage_complete:complete,
+      unlinked,submitted:false};
+  }
   async function run(){
     const readonly=await control();if(readonly)return readonly;
     const batch=await api('GET',B);
@@ -405,7 +477,7 @@ async (input) => {
         if(unconverted)return {outcome:'needs_catalog_review',review:snapshot(batch,a),submitted:false};
         if(input.plan?.associations)await associate(input.plan.associations);
         const check=await inspectOrCheck('check',{batch});
-        return {...check,visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
+        return {...check,...(check.waiting_for_media?{outcome:'waiting',waiting_for:'media',analysis_status:a.status}:{}),visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
           expected_granularity_verified:!!expected,review_tasks:reviewTasks(check,a,batch),submitted:false};
       }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,submitted:false};
       const key=JSON.stringify([a.status,a.frame_revision,a.catalog_revision]);
@@ -417,7 +489,14 @@ async (input) => {
   }
   try{
     let result;
-    if(input.action==='snapshot'){
+    if(authReceipt?.recovery_started&&['run','frames','catalog','associate','responses','retry-precut','check'].includes(input.action)){
+      const checked=await access();
+      if(checked.outcome!=='access_verified')fail('classroom_login_required',{next_action:'finish_login_then_access',retryable:false});
+    }
+    if(input.action==='access')result=await access();
+    else if(input.action==='relogin')result=await relogin();
+    else if(input.action==='roster')result=await roster();
+    else if(input.action==='snapshot'){
       const [b,a]=await Promise.all([api('GET',B),full()]);result=snapshot(b,a);
     }else if(input.action==='frames'){
       const stop=await control();if(stop)result=stop;
@@ -470,7 +549,7 @@ async (input) => {
     else if(input.action==='check'){
       const stop=await control();result=stop||await inspectOrCheck(input.action);
     }else result=await inspectOrCheck(input.action);
-    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt}};
+    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};
   }catch(error){return {ok:false,error:{code:error.code||'transport_failed',...(error.details||{})},transitions,calls,
-    checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt}};}
+    checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};}
 }

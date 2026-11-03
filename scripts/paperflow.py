@@ -115,7 +115,7 @@ def main():
     parser.add_argument('--output',type=Path)
     parser.add_argument('--verbose',action='store_true')
     sub=parser.add_subparsers(dest='action',required=True)
-    for name in ('inspect','check','diagnose','usage'):sub.add_parser(name)
+    for name in ('inspect','check','diagnose','usage','access','relogin','roster'):sub.add_parser(name)
     p=sub.add_parser('run');p.add_argument('--plan',type=Path)
     p.add_argument('--review-pdf',type=Path);p.add_argument('--review-out',type=Path)
     p.add_argument('--follow',action='store_true');p.add_argument('--max-seconds',type=int,default=600)

@@ -356,6 +356,106 @@ test('catalog replay with changed source cannot claim current review',async()=>{
  const retry=await main(input('catalog',{plan:w.catalogPlan,checkpoint:d.checkpoint}));assert.equal(retry.error.code,'source_changed');assert.equal(w.catalogCalls.length,2);
 });
 
+function authWorld(){
+ const w=world(),old=global.fetch;
+ w.sessionUser={id:'teacher-1',school_id:'school-1',identity:'teacher'};
+ w.loginCheck={'云谷会话':'有效且账号一致','课堂会话':'有效'};
+ w.loginCalls=0;
+ global.fetch=async(path,o)=>{
+  if(path==='/api/session?refresh_profile=false&include_models=false')return reply({user:w.sessionUser});
+  if(path==='/api/classroom/login-check')return reply(w.loginCheck);
+  if(path.startsWith('/api/login?force=true')){
+   w.loginCalls++;return reply({ok:false,login_url:'https://sso.example.test/login?private_state=secret_runtime_value'});
+  }
+  return old(path,o);
+ };return w;
+}
+test('access checks both authentication boundaries without requesting model configuration',async()=>{
+ const w=authWorld();const d=await main(input('access'));assert(d.ok&&d.result.classroom_valid);
+ assert.equal(d.result.outcome,'access_verified');assert.equal(d.checkpoint.auth_receipt.principal.user_id,'teacher-1');
+ assert.equal(w.starts,0);assert.equal(w.loginCalls,0);assert.equal(d.calls.length,2);
+ assert(d.calls.every(c=>c.method==='GET'&&!c.path.includes('include_models=true')));
+});
+test('HTTP 200 login diagnostic containing an embedded 428 cannot pass access',async()=>{
+ const w=authWorld();w.loginCheck={'云谷会话':'未验证','课堂会话':'未验证','状态码':428,'错误类型':'classroom_login_required','检查结果':'批阅台已登录，但云谷课堂会话已失效'};
+ const d=await main(input('access'));assert(d.ok&&!d.result.classroom_valid);assert.equal(d.result.outcome,'classroom_login_required');
+ assert.equal(d.result.next_action,'relogin');assert.equal(w.loginCalls,0);
+});
+test('unknown upstream diagnostic remains unverified rather than triggering login or pretending success',async()=>{
+ const w=authWorld();w.loginCheck={'状态码':503,'错误类型':'upstream_unavailable','课堂会话':'未验证'};
+ const d=await main(input('access'));assert.equal(d.result.outcome,'authentication_unverified');assert.equal(d.result.classroom_valid,false);assert.equal(w.loginCalls,0);
+});
+test('exact classroom expiry 428 has a deterministic recovery action while unrelated 428 does not',async()=>{
+ const w=world();w.a.status='not_generated';const old=global.fetch;
+ let message='批阅台已登录，但云谷课堂会话已失效';
+ global.fetch=async(path,o)=>path===B+'/analysis'&&o.method==='POST'?reply({detail:message},428):old(path,o);
+ let d=await main(input('run',{plan:{reference_student_id:'p1'}}));assert.equal(d.error.code,'classroom_login_required');assert.equal(d.error.next_action,'check_access_then_relogin');
+ message='请先完成模型能力配置';d=await main(input('run',{plan:{reference_student_id:'p1'}}));assert.equal(d.error.code,'api_failed');
+});
+test('relogin navigates once using a runtime URL, returns no authorization URL and rechecks the same identity',async()=>{
+ const w=authWorld();const a=await main(input('access'));
+ const originalTimeout=global.setTimeout,originalAssign=location.assign;let navigation;
+ global.setTimeout=fn=>{fn();return 1};location.assign=url=>{navigation=url};
+ try{
+  const d=await main(input('relogin',{checkpoint:a.checkpoint}));assert.equal(d.result.outcome,'authentication_navigation_started');
+  assert(navigation.startsWith('https://sso.example.test/'));assert(!JSON.stringify(d).includes('private_state'));
+  assert(!JSON.stringify(d).includes('secret_runtime_value'));assert.equal(w.loginCalls,1);
+  const again=await main(input('relogin',{checkpoint:d.checkpoint}));assert.equal(again.result.outcome,'authentication_recovery_pending');assert.equal(w.loginCalls,1);
+  const verified=await main(input('access',{checkpoint:d.checkpoint}));assert.equal(verified.result.outcome,'access_verified');assert.equal(verified.checkpoint.auth_receipt.recovery_started,false);
+ }finally{global.setTimeout=originalTimeout;location.assign=originalAssign;}
+});
+test('authentication recovery preserves focused edits and does not revoke an active login',async()=>{
+ const w=authWorld();const original=global.document;global.document={querySelector:()=>({})};
+ try{const d=await main(input('relogin'));assert.equal(d.result.outcome,'authentication_navigation_deferred');assert.equal(w.loginCalls,0);}
+ finally{if(original===undefined)delete global.document;else global.document=original;}
+});
+test('a changed teacher or school blocks all pending business writes after recovery',async()=>{
+ const w=authWorld(),d=await main(input('access'));d.checkpoint.auth_receipt.recovery_started=true;
+ w.sessionUser.school_id='different-school';
+ for(const action of ['run','frames','catalog','associate','responses','retry-precut','check']){
+  const result=await main(input(action,{checkpoint:d.checkpoint}));assert.equal(result.error.code,'identity_changed');
+ }
+ assert(w.trace.every(([method])=>method==='GET'));assert.equal(w.loginCalls,0);
+});
+test('one roster reconciliation returns only unmatched paper evidence and exact name candidates',async()=>{
+ const w=world();w.roster.papers[1].student_id=null;w.roster.papers[1].name='Verified Name';w.roster.papers[1].name_confirmed=false;
+ w.roster.students=[{id:'11',name:'Other private name'},{id:'12',name:'Verified Name'},{id:'13',name:'Remaining guessed name'}];
+ const d=await main(input('roster'));assert(d.ok);assert.equal(d.result.revision,1);assert.equal(d.result.linked,1);assert.equal(d.result.papers,2);
+ assert.equal(d.result.unlinked[0].index,2);assert.deepEqual(d.result.unlinked[0].pdf_pages,[2,2]);assert.equal(d.result.unlinked[0].evidence_confirmed,false);
+ assert.deepEqual(d.result.unlinked[0].exact_name_candidates,[{id:'12',name:'Verified Name'}]);
+ assert(!JSON.stringify(d.result).includes('Remaining guessed name'));assert.equal(d.calls.length,2);assert(w.trace.every(([m])=>m==='GET'));
+});
+test('identity and media blockers remain separate even when the platform subset says ready',async()=>{
+ const w=world();w.finish();w.roster.papers[1].student_id=null;
+ w.checkPolicy=()=>({ready:true,status:'awaiting_confirmation',issues:[{code:'MEDIA_CHECK_PENDING',severity:'pending'}]});
+ const d=await main(input('run'));assert(d.ok&&!d.result.ready);assert.equal(d.result.outcome,'identity_pending');
+ assert.equal(d.result.completion.analysis_completed,true);assert.equal(d.result.completion.identity_complete,false);
+ assert.equal(d.result.completion.media_pending,true);assert.equal(d.result.completion.preflight_passed,false);
+ assert(d.result.remaining.some(i=>i.code==='IDENTITY_PENDING'));assert(d.result.remaining.some(i=>i.code==='MEDIA_CHECK_PENDING'));
+ assert.equal(w.media,0);assert.equal(d.result.submitted,false);
+});
+test('contradictory platform ready with pending media cannot report full completion',async()=>{
+ const w=world();w.finish();w.checkPolicy=()=>({ready:true,status:'awaiting_confirmation',issues:[{code:'MEDIA_CHECK_PENDING',severity:'pending'}]});
+ const d=await main(input('run'));assert(d.ok&&!d.result.ready);assert.equal(d.result.completion.preflight_passed,false);assert.equal(d.result.completion.media_pending,true);
+ assert.equal(d.result.outcome,'pending');assert.equal(w.media,0);
+});
+test('roster gaps cannot report all identities linked',async()=>{
+ const w=world();w.roster.papers.pop();const d=await main(input('roster'));
+ assert.equal(d.result.outcome,'roster_coverage_gap');assert.equal(d.result.roster_coverage_complete,false);
+});
+test('run returns media waiting for CLI follow without restarting an existing preparation',async()=>{
+ const w=world();w.finish();w.checkPolicy=()=>({ready:false,status:'preparing',issues:[{code:'MEDIA_CHECK_PENDING',severity:'pending'}]});
+ const oldFetch=global.fetch,oldPerformance=global.performance;let now=0,reads=0;
+ global.performance={now:()=>now};
+ global.fetch=async(path,o)=>{
+  if(path===B+'/lesson-practice/progress'){reads++;if(reads>1)now=1001;return reply({preparation:{status:'running'}});}
+  return oldFetch(path,o);
+ };
+ try{
+  const d=await main(input('run'));assert(d.ok);assert.equal(d.result.outcome,'waiting');assert.equal(d.result.waiting_for,'media');assert.equal(w.media,0);assert.equal(d.result.ready,false);
+ }finally{global.performance=oldPerformance;}
+});
+
 (async()=>{let failed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+' '+e.message);}}console.log(JSON.stringify({tests:tests.length,passed:tests.length-failed,failed}));process.exitCode=failed?1:0;})();
 '''
 

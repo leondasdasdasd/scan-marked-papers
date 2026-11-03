@@ -92,6 +92,7 @@ JS = r"""async (input) => {
       let check=await api('POST',B+'/lesson-practice/preflight',{
         revision:cfg.config.revision,allow_pending_formula_protocol:false});
       const started=performance.now();
+      let preparationStatus=null;
       const mediaPending=(check.issues||[]).some(i=>['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)&&i.severity==='pending');
       const hardFailure=(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity));
       if(input.prepare && check.ready!==true && mediaPending && !hardFailure && scopeComplete && summary.structure_complete && !summary.unlinked.length) {
@@ -100,11 +101,11 @@ JS = r"""async (input) => {
           await api('POST',B+'/lesson-practice/progress/start',{revision:cfg.config.revision});
         while(performance.now()-started<input.timeout*1000) {
           const p=await api('GET',B+'/lesson-practice/progress');
-          const state=p.preparation?.status;
+          const state=p.preparation?.status;preparationStatus=state||null;
           if(state==='awaiting_confirmation') {
             break;
           }
-          if(['blocked','failed','paused'].includes(state)) break;
+          if(['blocked','failed','paused'].includes(state)||performance.now()-started>=input.timeout*1000) break;
           await new Promise(resolve=>setTimeout(resolve,input.interval*1000));
         }
         const latest=await api('GET',B+'/lesson-practice/config');
@@ -115,11 +116,28 @@ JS = r"""async (input) => {
         check.counts?.questionResults===summary.answers&&check.counts?.gradableQuestions===summary.leaf_questions&&
         check.counts?.skippedPapers===0;
       const ready=check.ready===true&&scopeComplete&&coverageMatches&&
-        check.status==='awaiting_confirmation'&&summary.structure_complete&&!summary.unlinked.length;
+        check.status==='awaiting_confirmation'&&summary.structure_complete&&!summary.unlinked.length&&
+        !(check.issues||[]).some(i=>['pending','blocker','failure'].includes(i.severity));
+      const remaining=[];
+      if(summary.unlinked.length)remaining.push({code:'IDENTITY_PENDING',count:summary.unlinked.length});
+      if(!summary.structure_complete)remaining.push({code:'STRUCTURE_INCOMPLETE'});
+      if(!scopeComplete)remaining.push({code:'SCOPE_INCOMPLETE'});
+      if(!coverageMatches)remaining.push({code:'CHECK_COVERAGE_MISMATCH'});
+      const pendingMedia=(check.issues||[]).some(i=>['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)&&i.severity==='pending');
+      for(const issue of check.issues||[]){
+        if(!['blocker','failure','pending'].includes(issue.severity))continue;
+        const prior=remaining.find(i=>i.code===issue.code&&i.severity===issue.severity);
+        if(prior)prior.count++;else remaining.push({code:issue.code,severity:issue.severity,count:1});
+      }
       result={...summary,scope_complete:scopeComplete,check_coverage_matches:coverageMatches,
-        check:cleanCheck(check),ready:check.ready===true&&scopeComplete&&coverageMatches&&
-        check.status==='awaiting_confirmation'&&summary.structure_complete&&!summary.unlinked.length,
-        outcome:ready?'ready':!scopeComplete||!coverageMatches?'coverage_gap':summary.unlinked.length?'identity_pending':
+        completion:{analysis_completed:summary.analysis_status==='completed'&&!summary.stale,
+          structure_verified:summary.structure_complete,identity_complete:summary.unlinked.length===0&&summary.roster_coverage_complete,
+          media_pending:pendingMedia,preflight_passed:ready},remaining,
+        preparation_status:preparationStatus,waiting_for_media:preparationStatus==='running'&&pendingMedia&&
+          scopeComplete&&coverageMatches&&summary.structure_complete&&!summary.unlinked.length&&
+          !(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity)),
+        check:cleanCheck(check),ready,
+        outcome:ready?'ready':!scopeComplete?'coverage_gap':summary.unlinked.length?'identity_pending':!coverageMatches?'coverage_gap':
           (check.issues||[]).some(i=>['blocker','failure'].includes(i.severity))?'blocked':'pending',
         stopped_at:'preflight',submitted:false};
     } else if(input.action==='watch') {

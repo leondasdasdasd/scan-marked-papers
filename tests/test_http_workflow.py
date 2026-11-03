@@ -42,7 +42,12 @@ class HttpWorkflowTests(unittest.TestCase):
                 if raw and (not isinstance(body, dict) or self.headers.get('Content-Type') != 'application/json'):
                     request_errors.append('body is not a JSON object')
                 status = 200
-                if route == B:
+                if route == '/api/session':
+                    owner.assertEqual(urlsplit(self.path).query, 'refresh_profile=false&include_models=false')
+                    result = {'user': {'id': 'teacher1', 'school_id': 'school1', 'identity': 'teacher'}}
+                elif route == '/api/classroom/login-check':
+                    result = {'云谷会话': '有效且账号一致', '课堂会话': '有效'}
+                elif route == B:
                     result = batch
                 elif route == B+'/lesson-practice/imports':
                     result = {'items': []}
@@ -117,10 +122,10 @@ class HttpWorkflowTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
                     return json.loads(result.stdout)
 
-                def step(plan):
+                def step(plan=None, action='run'):
                     path = directory/'plan.json';path.write_text(json.dumps(plan))
                     script = directory/'run.js'
-                    emitted = command('--emit-script', str(script), 'run', '--plan', str(path))
+                    emitted = command('--emit-script', str(script), action, *(['--plan', str(path)] if plan else []))
                     self.assertFalse(emitted['result']['executed'])
                     bootstrap = ('global.location={origin:'+json.dumps(origin)+'};'
                         'const actualFetch=global.fetch;global.fetch=(p,o)=>actualFetch(new URL(p,location.origin),o);'
@@ -132,6 +137,8 @@ class HttpWorkflowTests(unittest.TestCase):
                     raw_result = directory/'browser-result.json';raw_result.write_text(evaluated.stdout)
                     return command('collect', '--result', str(raw_result))
 
+                verified = step(action='access')
+                self.assertEqual(verified['result']['outcome'], 'access_verified')
                 first = step({'reference_student_id': 'p1'})
                 self.assertEqual(first['result']['outcome'], 'needs_frame_review')
                 children = [{'id': f'calc{i}', 'label': f'1({i})', 'parent_id': None,

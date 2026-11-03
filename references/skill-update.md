@@ -4,17 +4,17 @@
 
 ## 只查看
 
-1. 读取本地技能目录的 YAML `name`、`description`、agents 元信息及支持文件，记录当前版本。若没有显式版本字段，使用已安装包的 release/tag、文件校验和或变更时间作为“版本未标注”，不要自行编造语义版本。
+1. 读取本地 SKILL.md 的 YAML `name`、`description`、metadata.version 和必要 agents 元信息，记录当前版本；需要判断命令兼容性时读现有 CLI help。若没有显式版本字段，使用已安装包的 release/tag、文件校验和或变更时间作为“版本未标注”，不要自行编造语义版本。
 2. 取得 GitHub owner/repo：优先用户当次提供的仓库；其次使用已核实的官方项目元数据。任意工作区的 Git remote 本身不自动证明官方来源，须核实其与用户指定项目的关系。没有可信 owner/repo 时报告“无法核对 GitHub 最新版本”，不猜仓库。
-3. 按已核实官方仓库的实际分发入口只读比较版本。本仓库当前通过 main/SKILL.md 与 main 的 scan-marked-papers.zip 分发：读取 [官方 main 元信息](https://github.com/leondasdasdasd/scan-marked-papers/blob/main/SKILL.md) 的 metadata.version，并记录对应提交，不能只凭过期的 releases/latest 或 tags 判断最新。Releases/tags 可辅助了解历史；若用户指定某个历史版本则按其目标核对。展示版本差异、变更文件、兼容性、迁移需要及已有验证；API 或页面不可读时如实说明，不把搜索结果、fork 或非官方仓库当官方发布。只查看不下载、安装或推送。
+3. 按已核实官方仓库的实际分发入口只读比较版本。本仓库当前通过 main/SKILL.md 与 main 的 scan-marked-papers.zip 分发：读取 [官方 main 元信息](https://github.com/leondasdasdasd/scan-marked-papers/blob/main/SKILL.md) 的 metadata.version，并记录对应提交，不能只凭过期的 releases/latest 或 tags 判断最新。Releases/tags 可辅助了解历史；若用户指定某个历史版本则按其目标核对。展示版本/提交、已有变化摘要、兼容性、迁移需要及已有验证；可信来源已核实后不解读全仓源码、不自行重建源码差异清单，也不要求发布包附带 tests 或开发文档。API 或页面不可读时如实说明，不把搜索结果、fork 或非官方仓库当官方发布。只查看不下载、安装或推送。
 
 ## 用户明确要求更新
 
 先核实目标 owner/repo、更新范围及来源版本/提交；本仓库未指定历史版本时，按已核实官方 main 的当前 metadata.version 和固定提交获取。没有可信仓库时先说明缺口，不猜来源。用户明确更新已授权该范围内的下载、校验和安装，不增加逐步确认；校验完成前不替换本地文件。执行以下步骤时区分状态：
 
 - **下载包**：本仓库优先使用已核实的 main scan-marked-papers.zip；先记录 main 提交，再从该固定提交取得 ZIP，避免检查元信息与下载之间 main 已变化。记录来源 URL、提交、metadata.version、包 SHA-256 和顶层结构。若用户指定 release/tag，使用真实 release asset 或已核实的 tag 归档，不把示例路径、未存在的 asset 当成功。下载不等于安装。
-- **校验包**：确认包含 `SKILL.md`、合法 YAML frontmatter、需要的 `agents/openai.yaml` 与 references，目录名为 `scan-marked-papers`，没有凭证、Cookie、storage state、临时业务数据或不相干大文件。核对包内 metadata.version 与读取的目标版本一致，并与来源固定提交的 SKILL.md/必要支持文件比对；包无提交元信息时依据固定提交来源及文件内容核对，不编造内嵌提交。读取变更说明并检查兼容性；不要执行包内未知脚本来“安装”。
-- **实际安装**：只有用户明确授权更新时，才将当前本地技能目录备份到实际技能发现目录之外的受控临时位置，避免备份被识别为额外技能，再在 `$CODEX_HOME/skills/scan-marked-papers`（或当前技能管理器报告的实际安装目录）替换。保留用户本地已有的未提交技能修改：先比较差异；若上游会覆盖本地改动，列出冲突并停止替换，除非用户明确选择覆盖。不要用 `git add`、commit、push 或自动改业务仓库。
+- **校验包**：核对固定提交来源、包 SHA-256、顶层结构、合法 SKILL.md frontmatter、目标 metadata.version、必要 agents/references/scripts 是否齐备，排除凭证、会话和临时业务数据。版本及必要入口与固定提交对应即可；包无提交元信息时不编造内嵌提交。兼容性只读已有变化摘要与可信 CLI help；不全仓源码 diff、不逐项比较内部实现，也不因缺 tests/docs 阻止安装。不要执行未知脚本来“安装”。
+- **实际安装**：只有用户明确授权更新时，才将当前本地技能目录备份到实际技能发现目录之外的受控临时位置，避免备份被识别为额外技能，再在 `$CODEX_HOME/skills/scan-marked-papers`（或当前技能管理器报告的实际安装目录）替换。保留用户本地已有修改，仅为确认覆盖冲突比较相关文件；若上游会覆盖本地改动，列出冲突并停止替换，除非用户明确选择覆盖。不要用 `git add`、commit、push 或自动改业务仓库。
 - **安装后验证**：目标环境已有 quick_validate.py 时运行该工具；没有该工具的 WorkBuddy 等环境按包结构、SKILL.md 版本、agents 元信息与必要支持文件逐项核验，不要求安装 Codex。回读实际安装的版本、来源提交/tag 和关键 references，确认新版本已生效。只报告真实验证结果，不把下载完成或文件存在当安装成功。
 - **失败回滚**：下载、结构校验、兼容性检查、替换或验证任一步失败，保留错误日志和临时包，恢复安装前备份并按目标环境重做上述验证；回滚失败时保留旧目录，不删除用户技能，报告具体阻塞。更新成功后清理本次临时包和备份；保留用户原有会话、服务与其他技能。
 
