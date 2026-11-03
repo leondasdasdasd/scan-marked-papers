@@ -1,5 +1,7 @@
 async (input) => {
   const legacy = __LEGACY__;
+  const workflowFactory = __WORKFLOW__;
+  let uploadReceipt=input.checkpoint?.upload_receipt||null;
   const B='/api/batches/'+input.batch;
   const calls=[], transitions=[];
   let receipt=input.checkpoint?.frame_receipt||null;
@@ -9,14 +11,14 @@ async (input) => {
   const clone=x=>JSON.parse(JSON.stringify(x));
   const fail=(code,details={})=>{throw Object.assign(new Error(code),{code,details});};
   if(location.origin!==input.origin)return {ok:false,error:{code:'origin_mismatch'}};
-  if(input.checkpoint?.batch_id&&(input.checkpoint.origin!==input.origin||input.checkpoint.batch_id!==input.batch))
+  if(input.checkpoint?.origin&&(input.checkpoint.origin!==input.origin||input.batch&&input.checkpoint.batch_id!==input.batch))
     return {ok:false,error:{code:'checkpoint_origin_or_batch_mismatch'}};
-  async function api(method,path,body) {
+  async function api(method,path,body,extraHeaders={}) {
     const t=performance.now();
     let response;
     try{response=await fetch(path,{method,credentials:'same-origin',redirect:'error',
-      headers:body===undefined?{}:{'Content-Type':'application/json'},
-      ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(45000)});}
+      headers:{...(body===undefined||body instanceof FormData?{}:{'Content-Type':'application/json'}),...extraHeaders},
+      ...(body===undefined?{}:{body:body instanceof FormData?body:JSON.stringify(body)}),signal:AbortSignal.timeout(45000)});}
     catch{fail('transport_uncertain',{method,path,retryable:false,next_action:'read_state_before_retry'});}
     calls.push({method,path,status:response.status,ms:Math.round(performance.now()-t)});
     if(!response.ok){
@@ -53,7 +55,7 @@ async (input) => {
   }
   function snapshot(batch,a) {
     return {batch_id:batch.id,workflow_mode:batch.workflow_mode,pages_per_paper:batch.pages_per_paper,
-      total_pages:batch.total_pages,analysis_status:a.status,frame_revision:a.frame_revision,
+      total_pages:batch.total_pages,analysis_status:a.status,read_version:a.read_version,frame_revision:a.frame_revision,
       catalog_revision:a.catalog_revision,analysis_confirmation_version:batch.analysis_confirmation_version||a.analysis_confirmation_version,
       source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
       reference_start:a.reference_start,frames:(a.frames||[]).map(f=>({id:f.id,label:f.label,parent_id:f.parent_id||null,regions:f.regions,source:f.source})),
@@ -196,11 +198,12 @@ async (input) => {
     calls.push(...(d.calls||[]));if(!d.ok)fail(d.error.code,d.error);
     return d.result;
   }
-  async function control(){
+  async function control({resume=false}={}){
     const [imports,tasks]=await Promise.all([api('GET',B+'/lesson-practice/imports?check_source=false'),api('GET',B+'/task-control')]);
     if((imports.items||[]).length)return {outcome:'existing_import_readonly',submitted:false};
     for(const task of Object.values(tasks||{})){
-      if(task&&['stopping','stopped','paused'].includes(task.state||task.status))return {outcome:'stopped_readonly',submitted:false};
+      if((task?.state||task?.status)==='stopping')return {outcome:resume?'waiting':'stopped_readonly',waiting_for:'task_stop',submitted:false};
+      if(task&&['stopped','paused'].includes(task.state||task.status)&&!resume)return {outcome:'stopped_readonly',submitted:false};
     }
     return null;
   }
@@ -236,10 +239,13 @@ async (input) => {
     const ids=(current.classes||[]).map(c=>c.id).sort();
     const same=current.semester_id===plan.semester_id&&JSON.stringify(ids)===JSON.stringify([...(plan.class_ids||[])].sort())&&
       Object.entries(plan.scope||{}).every(([k,v])=>current.scope?.[k]===v);
-    if(same)return;
+    if(same)return current;
     if(current.revision!==plan.revision)fail('roster_version_conflict');
     await api('PUT',B+'/roster',{revision:plan.revision,semester_id:plan.semester_id,class_ids:plan.class_ids,scope:plan.scope});
-    transitions.push({action:'scope_selected'});
+    const saved=await api('GET',B+'/roster');
+    if(saved.semester_id!==plan.semester_id||JSON.stringify((saved.classes||[]).map(c=>c.id).sort())!==JSON.stringify([...plan.class_ids].sort())||
+      Object.entries(plan.scope||{}).some(([k,v])=>saved.scope?.[k]!==v))fail('scope_not_persisted');
+    transitions.push({action:'scope_selected'});return saved;
   }
   async function evidence(plan){
     const [batch,a]=await Promise.all([api('GET',B),full()]);
@@ -260,7 +266,7 @@ async (input) => {
   async function responses(plan){
     const stop=await control();if(stop)return stop;
     const [batch,initial]=await Promise.all([api('GET',B),api('GET',B+'/analysis')]);let a=initial;
-    if(batch.workflow_mode!=='scan')fail('unsupported_workflow');
+    if(!workflow.organizer(batch))fail('unsupported_workflow');
     if(a.stale||a.status!=='completed')fail('source_not_completed');
     if(!plan||!plan.frame_revision||plan.catalog_revision===undefined||!plan.source_pdf_sha256||
       plan.source_pdf_sha256!==a.source_pdf_sha256||plan.frame_revision!==a.frame_revision||
@@ -316,7 +322,7 @@ async (input) => {
     return leaves;
   }
   async function confirmCatalog(batch,a,plan){
-    if(batch.workflow_mode!=='scan')fail('unsupported_workflow');
+    if(!workflow.organizer(batch))fail('unsupported_workflow');
     if(catalogReceipt?.operation_id===plan?.operation_id){
       if(catalogReceipt.plan_signature!==JSON.stringify(plan))fail('operation_changed');
       if(plan.source_pdf_sha256!==a.source_pdf_sha256||plan.reference_student_id!==a.reference_student_id)fail('source_changed');
@@ -400,7 +406,7 @@ async (input) => {
       try{const session=await api('GET','/api/session?refresh_profile=false&include_models=false');rememberPrincipal(session.user);}
       catch(error){if(error.code!=='login_required')throw error;}
     }
-    const path='/exams/'+input.batch+'/analysis';
+    const path=input.batch?'/exams/'+input.batch+'/analysis':'/';
     const login=await api('POST','/api/login?force=true&return_to='+encodeURIComponent(path));
     let target;try{target=new URL(login.login_url,input.origin);}catch{fail('invalid_login_response');}
     if(!['http:','https:'].includes(target.protocol)||target.username||target.password||!login.login_url||
@@ -426,18 +432,34 @@ async (input) => {
       papers:expected.size,linked:r.papers.filter(p=>p.student_id).length,roster_coverage_complete:complete,
       unlinked,submitted:false};
   }
+  const workflow=workflowFactory({input,api,fail,full,selectScope,inspectOrCheck,control,transitions,
+    getUpload:()=>uploadReceipt,setUpload:r=>uploadReceipt=r});
   async function run(){
-    const readonly=await control();if(readonly)return readonly;
+    const readonly=await control({resume:input.plan?.resume_authorized===true});if(readonly)return readonly;
     const batch=await api('GET',B);
-    if(batch.workflow_mode!=='scan')return {outcome:'unsupported_workflow',submitted:false};
+    if(!['scan','grading'].includes(batch.workflow_mode))return {outcome:'unsupported_workflow',submitted:false};
     await selectScope(input.plan?.scope);
+    if(batch.workflow_mode==='grading'){
+      const pending=await workflow.grade(batch);if(pending)return pending;
+    }
     let a=await full();
+    if(batch.workflow_mode==='grading'&&!workflow.organizer(batch)&&(!a.status||a.status==='not_generated')){
+      await api('POST',B+'/lesson-practice/prepare-analysis');transitions.push({action:'analysis_preparation_started'});a=await full();
+    }
+    if(!workflow.organizer(batch)&&(!a.status||a.status==='not_generated'))return {outcome:'needs_analysis_recovery',submitted:false};
     if(a.stale)return {outcome:'source_stale',submitted:false};
     if(!a.status||a.status==='not_generated'){
       const reference=input.plan?.reference_student_id;
-      if(!batch.students.some(s=>s.id===reference))return {outcome:'needs_reference',papers:batch.students.length,
-        candidates:batch.students.slice(0,5).map(s=>({id:s.id,index:s.index,pdf_pages:[s.start+1,s.start+batch.pages_per_paper],
-          pages:Array.from({length:batch.pages_per_paper},(_,i)=>input.origin+B+'/pages/'+(s.start+i)+'?original=true&student_id='+encodeURIComponent(s.id))})),submitted:false};
+      if(!batch.students.some(s=>s.id===reference)){
+        const rate=s=>{const rows=s.judgments?.length?s.judgments:s.results;
+          return Array.isArray(rows)&&rows.length&&rows.every(r=>['correct','incorrect','partial','unanswered'].includes(r.verdict))?
+            rows.filter(r=>r.verdict==='correct').length/rows.length:null;};
+        const ranked=batch.workflow_mode==='grading'&&batch.students.every(s=>rate(s)!==null);
+        const candidates=ranked?[...batch.students].sort((x,y)=>rate(y)-rate(x)||x.index-y.index):batch.students;
+        return {outcome:'needs_reference',papers:batch.students.length,reference_ranking:ranked?'existing_grading_verdicts':'first_papers',
+          candidates:candidates.slice(0,5).map(s=>({id:s.id,index:s.index,pdf_pages:[s.start+1,s.start+batch.pages_per_paper],
+            ...(ranked?{correct_rate:rate(s)}:{}),pages:Array.from({length:batch.pages_per_paper},(_,i)=>input.origin+B+'/pages/'+(s.start+i)+'?original=true&student_id='+encodeURIComponent(s.id))})),submitted:false};
+      }
       await api('POST',B+'/analysis',{reference_student_id:reference});transitions.push({action:'analysis_started'});
       a=await full();
     }
@@ -489,11 +511,17 @@ async (input) => {
   }
   try{
     let result;
-    if(authReceipt?.recovery_started&&['run','frames','catalog','associate','responses','retry-precut','check'].includes(input.action)){
+    if(authReceipt?.recovery_started&&['run','frames','catalog','associate','responses','retry-precut','check','upload','scope','api-call','sync'].includes(input.action)){
       const checked=await access();
       if(checked.outcome!=='access_verified')fail('classroom_login_required',{next_action:'finish_login_then_access',retryable:false});
     }
-    if(input.action==='access')result=await access();
+    if(input.action==='upload')result=await workflow.upload(input.plan);
+    else if(input.action==='classes')result=await workflow.classes(input.plan);
+    else if(input.action==='class-students')result=await workflow.classStudents(input.plan);
+    else if(input.action==='api-call')result=await workflow.call(input.plan);
+    else if(input.action==='sync')result=await workflow.sync(input.plan);
+    else if(input.action==='scope'){const stop=await control();if(stop)result=stop;else{const saved=await selectScope(input.plan);result={outcome:'scope_selected',roster:workflow.redact(saved),submitted:false};}}
+    else if(input.action==='access')result=await access();
     else if(input.action==='relogin')result=await relogin();
     else if(input.action==='roster')result=await roster();
     else if(input.action==='snapshot'){
@@ -519,7 +547,7 @@ async (input) => {
         const a=await full(),p=input.plan?.page;
         if(a.status!=='awaiting_frames'||a.frame_revision!==input.plan?.frame_revision)fail('version_conflict');
         const batch=await api('GET',B);
-        if(batch.workflow_mode!=='scan')fail('unsupported_workflow');
+        if(!workflow.organizer(batch))fail('unsupported_workflow');
         if(!Number.isInteger(p)||p<0||p>=batch.pages_per_paper||
           ((a.frames||[]).length&&!(a.localization_failed_pages||[]).includes(p)))fail('invalid_retry_page');
         if((a.frames||[]).some(f=>f.source==='manual'&&f.regions.some(r=>r.page===p)))fail('manual_frames_present');
@@ -549,7 +577,7 @@ async (input) => {
     else if(input.action==='check'){
       const stop=await control();result=stop||await inspectOrCheck(input.action);
     }else result=await inspectOrCheck(input.action);
-    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};
+    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:uploadReceipt?.batch_id||input.batch,upload_receipt:uploadReceipt,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};
   }catch(error){return {ok:false,error:{code:error.code||'transport_failed',...(error.details||{})},transitions,calls,
-    checkpoint:{origin:input.origin,batch_id:input.batch,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};}
+    checkpoint:{origin:input.origin,batch_id:uploadReceipt?.batch_id||input.batch,upload_receipt:uploadReceipt,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};}
 }

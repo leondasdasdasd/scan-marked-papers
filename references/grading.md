@@ -1,6 +1,6 @@
 # 新批改与中途续做
 
-核对来源：`backend/app.py` 的 upload、prepare_job/run_judgment_batch/run_native_batch、学生修改与 analysis 路由；`backend/read_routes.py` 的 live-state/学生读取；`backend/analysis_trigger.py`、`result_analysis.py`、`organizer_flow.py`；`frontend/src/App.tsx` 的 ModePicker/upload/start 与 `ResultAnalysis.tsx` 的 generateNow。以下是源码契约，尚不代表各环境实际可用；线上不同以真实响应/页面为准。B 为 `/api/batches/{bid}`。
+核对来源：`backend/app.py` 的 upload、批改启动、学生修改与 analysis 路由；`backend/read_routes.py` 的 live-state/学生读取；`analysis_trigger.py`、`organizer_flow.py` 及前端真实调用。以下是源码契约，尚不代表各环境实际可用。B 为 `/api/batches/{bid}`，L 为 `B/lesson-practice`。正常流程使用 [CLI](cli.md) 的 upload/run；需定点补步骤时查 api-list，用受限 api-call 读取或保存，不默认转去业务页面。
 
 ## 模式与能力
 
@@ -12,7 +12,7 @@
 
 快速批改不是快速扫描。`scan_fast` 只属扫描；`analysis_fast` 属非 LLM 快速批改**后的整理**设置，不能用它选供应商或恢复任务。已有记录保持 engine/workflow/模式，除非本次明确要求变更且真实契约允许。供应商批改完成后的模型整理仍须核实对应阶段的模型能力与授权，不因供应商可用就跳过。
 
-新 PDF 仍 `POST /api/batches` multipart，沿用 api.md 的幂等头/文件与分卷校验。明确传 workflow_mode、grading_engine、pages_per_paper、paper_size、orientation、paper_sides、has_answer_paper，llm_model 用平台允许值；其余按本次有效设置。不能将学生第一份当答案卷吞掉。普通 LLM grading 无答案卷被 422 拒绝，不能靠省略字段绕过。响应学生 start/index 已扣除答案卷，后续计数以真实 students 为准。
+新 PDF 用 upload 调用 `POST /api/batches` multipart，沿用 [API参考](api.md) 的幂等头/文件与分卷校验；文件工具仅在需要时注入文件，不点击上传表单。明确传 workflow_mode、grading_engine、pages_per_paper、paper_size、orientation、paper_sides、has_answer_paper，llm_model 用平台允许值；其余按本次有效设置。不能将学生第一份当答案卷吞掉。普通 LLM grading 无答案卷被 422 拒绝，不能靠省略字段绕过。响应学生 start/index 已扣除答案卷，后续计数以真实 students 为准。
 
 ## 已有链接与阶段判断
 
@@ -26,7 +26,7 @@
 | --- | --- |
 | 已上传尚未启动 | 核对原 mode/分卷/答案卷/名单和必要能力；新批改按 start，scan 按参考卷预切 |
 | extracting/读取答案中 | 有活跃 job 就轮询；不要再次 extract 或 start |
-| 答案卷已读取、paused 或页面待核 | 检查真实 questions/semantic_questions、答案与定位；该版本没有通用 answers/confirm 接口，核对后用 start 继续。需修改超出已有契约时页面处理或报告，不臆造确认 API |
+| 答案卷已读取、paused 或待核 | 检查真实 questions/semantic_questions、答案与定位；没有通用 answers/confirm 接口，核对后用 start 继续。需修改先查已登记接口的实际字段与用途；确无支持才按具体缺口回退或报告，不臆造确认 API |
 | grading/queued 或分析 generating | 按现有任务进度轮询；409 正在处理是观察原任务的信号，不是换 batch 或强制重跑理由 |
 | 部分批改 failed/pending、已有 done | 核对失败原因与人工修改，按学生重试缺失范围；done 与人工结果保留，不对完成卷默认重新批改 |
 | 已批改、未整理 | 快速供应商走统一整理 B/analysis 并选参考卷；LLM 走 lesson-practice/prepare-analysis；见下文 |
@@ -35,7 +35,7 @@
 | 最新 check ready 且输入无变化 | 默认直接交付已有批阅台链接与最新统计/边界，不为“接着做”自动重新生成；本次明确同步才继续提交 |
 | 已有导入非终态/暂停 | 默认检查模式只读回报，不调用提交型 resume；明确同步模式才按原 attempt 恢复 |
 | 已同步 SUCCEEDED | 只读回报已有真实链接与 local_changed；不覆盖、不重新提交 |
-| 状态未知/中断 | 回读 live-state/task-control、原错误/recovery_action 与当前页面“继续”请求，核实无活跃 job 后仅走真实恢复入口；不臆造通用 resume/force API |
+| 状态未知/中断 | 由 run 读取 live-state/task-control、原错误/recovery_action；核实无活跃 job 后仅走已登记且适用于当前阶段的恢复接口，不臆造通用 resume/force API |
 
 `stale` 只说明整理来源版本变化，不等于原始批改失败。先比对当前学生 result_version/revision、源 PDF 身份/指纹与分析来源版本；原始学生仍 done 且结果有效时，只刷新实际受影响的整理，不调用原始批改 retry。已有人工更正必须保留。变化范围依据真实差异决定，无法确定先读相关状态/来源，不为清 stale 凭空全批重跑。
 
@@ -44,7 +44,7 @@
 - `POST B/start` **无请求 body**，服务端先 context.prepare 名单/课程与 gateway_preflight，再启动任务。返回 `{ok:true,status:...}` 仅表示接受；之后看真实 progress 和学生状态。默认 all 只处理 status!=done，但不能据此无视人工修改/删除标记保护或混合状态。
 - `POST B/students/{sid}/retry` **无请求 body**，只用于该学生的缺失/失败批改；目标重试可重批 done 卷，故不能拿它当普通刷新或默认重跑人工修正卷。原批已人工修改/删除多余批注时保留原结果，遇到保护性 409/错误不清除标志来重试。
 - `POST B/answers/extract` **无请求 body**，仅 LLM 读取前置答案卷，answers_only 完成后通常 paused；非 LLM 会 422。正常 start 可自行读取尚未提取的答案再批改，不要求每个 LLM 任务必须先 extract。无活跃任务且用户目标需要先核答案时才单独调用。无通用答案确认接口；`POST B/answers/provider-draft` 是供应商几何评估草稿，不替换已保存模板/批改，不能当答案确认。
-- 模板位置需要修改时 `PATCH B/layout` body `{revision:当前layout_revision,questions:完整当前Question数组}`，只允许几何（page/x/y/answer_regions/blank_anchors位置），不能改题干/答案或空结构；批改中或已有特定对齐结果时会拒绝。复杂题干/标准答案更正不假设该接口支持，依据当前页面真实契约处理。
+- 模板位置需要修改时 `PATCH B/layout` body `{revision:当前layout_revision,questions:完整当前Question数组}`，只允许几何（page/x/y/answer_regions/blank_anchors位置），不能改题干/答案或空结构；批改中或已有特定对齐结果时会拒绝。复杂题干/标准答案更正不假设该接口支持，先核对已登记目录编辑接口的阶段与字段；确无接口才报告缺口或定点使用页面。
 - 身份编辑用 api.md 的 identity_only 契约。grading 原结果编辑 `PATCH B/students/{sid}` body 是 `{identity_only:false,revision,name,name_confirmed,results}`，judgment_only 模式还要保留/提交当前 judgments；以学生实时 revision 与完整当前字段为基线，仅改必要条目，不能 results=[] 清空批改。扫描不接受此非身份编辑。`review_projected`/review-题号的共用复核结果不能回灌旧编辑接口。
 - 共用复核判定用 `PATCH B/analysis/students/{sid}/questions/{qid}`，至少 `{review_token:当前令牌,verdict:真实核验后判定,verdict_only:true}`；verdict 为 correct/incorrect/partial/unanswered，来源小空按当前接口给 blank_id 或 source_ref，不能从显示序号猜。几何/分数/评语复核用 `PATCH B/students/{sid}/review-results`，`{review_token,results:[...]}` 的每项要求 question_id、score（可 null）、reason、page、x、y，可含 blank_positions/hidden_mark_ids；按真实编辑器保持字段和来源。所有编辑回读确认持久化并采用新 token/revision，不能覆盖人工判定。
 

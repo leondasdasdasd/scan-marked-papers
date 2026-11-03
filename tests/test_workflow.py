@@ -121,8 +121,8 @@ test('unknown identity keeps the entire batch not ready even if platform subset 
  assert(d.ok&&!d.result.ready);assert.equal(d.result.papers,2);assert.equal(d.result.unlinked.length,1);
  assert.equal(d.result.check.counts.students,1);assert.equal(w.media,0);
 });
-test('grading routes are returned to the existing skill without a mutation',async()=>{
- const w=world();w.batch.workflow_mode='grading';const d=await main(input('run'));
+test('unrelated workflows remain read only',async()=>{
+ const w=world();w.batch.workflow_mode='essay';const d=await main(input('run'));
  assert.equal(d.result.outcome,'unsupported_workflow');assert(w.trace.every(([m])=>m==='GET'));
 });
 test('split with duplicate IDs rejects without a write',async()=>{

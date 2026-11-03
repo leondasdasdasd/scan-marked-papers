@@ -1,10 +1,10 @@
 # 批量 CLI 编排
 
-本说明对应 `scripts/paperflow.py`、`paperflow.js` 与兼容 `paperflow_base.py`。实际 `workflow_mode=scan` 的已支持步骤使用主 CLI 或 emit/evaluate/collect 桥接；只有实际工具不兼容、缺命令/evaluate 能力或阶段未覆盖的具体证据，才回退原生页面/接口补该缺口。默认终点为真实全批同步检查，不提交导入；已有导入与停止标记优先只读。办公产品的导入与能力边界见 [office-agents.md](office-agents.md)。
+本说明对应主入口 `scripts/paperflow.py` 与 `paperflow.js`；`paperflow_base.py`仅为旧兼容入口。三种业务流程——已批扫描、供应商快速批改、答案卷智能批改——均先用专用CLI/run，再用受限api-call补定点步骤；没有专用编排不等于必须操作页面。只有接口不支持/不兼容或工具缺能力的具体证据，才定点回退页面。默认终点为真实全批同步检查，不提交导入；已有导入与停止标记优先只读。办公接入边界见 [office-agents.md](office-agents.md)。
 
 ## 入口与输出
 
-参数由智能体从当前环境获取，不交给老师配置。Python 全局参数放在子命令前；已有链接优先 `--batch-url <记录链接>`，支持经核实的 http(s) 业务路由，例如 `/exams/{id}/analysis?class_id=...`，自动提取 origin/batch id。也可用 `--base-url <origin> --batch-id <ID>`，base-url 默认 `https://piyue.yungu.org`；显式参数与链接冲突会拒绝。默认地址不证明生产，执行前核实身份、学校、权限与环境，页面必须同源，不跟随重定向。
+参数由智能体从当前环境获取，不交给老师配置。Python全局参数放在子命令前；已有链接优先 `--batch-url <记录链接>`，从经核实的http(s)业务路由提取origin/batch id。也可用 `--base-url <origin> --batch-id <ID>`；base-url默认 `https://piyue.yungu.org`，显式参数与链接冲突会拒绝。access/relogin/classes/api-list/api-call/upload可在没有batch时使用，其他命令按实际要求定位本批。默认地址不证明生产；授权浏览器必须同源，不跟随意外重定向。
 
 按现有能力选一路，不擅装工具：
 
@@ -12,8 +12,8 @@
 | --- | --- |
 | `--browser-backend playwright` | 已有 run-code/page.evaluate 适配器与真实已登录 `--browser-session`。`--wrapper` 默认 `~/.codex/skills/playwright/scripts/playwright_cli.sh`，可指向现有兼容入口；不是办公产品安装前提 |
 | `--browser-backend agent-browser` | 已有可执行文件支持 `--session <会话> --json eval --stdin`，返回 `success:true`、data.result 为含布尔 ok 的对象。`--browser-executable` 默认 agent-browser；实际 session 须已连接授权页面，仅能点击/截图不证明兼容 |
-| `--emit-script <PATH>` + 现有浏览器 evaluate | 不要求 browser-session 或兼容 CLI 后端。只生成自包含 JS 表达式，返回 `executed=false`，不执行。由当前产品实际提供的 evaluate 在目标授权页面原样执行，再按下文 collect；不重新拼 fetch |
-| 原生页面 | 当前产品无 JavaScript evaluate 或命令执行能力时，按真实页面完成可用步骤并保留阻塞 |
+| `--emit-script <PATH>` + 现有浏览器 evaluate | 不要求browser-session或兼容CLI后端。只生成一次加载的engine_file与小步骤script_file，返回executed=false。首次/导航后先evaluate引擎，再执行小步骤并collect；后续只执行小步骤，不重新拼fetch或逐轮展开完整引擎 |
+| 原生页面 | 仅登录、确需文件注入/图证，或已有具体接口/工具缺口时使用；缺能力如实保留阻塞 |
 
 真实后端仍要求实际已登录会话，不自动接管 Chrome或导出 Cookie/令牌/storage state；课堂会话恢复使用下文 `access`/`relogin`。emit 也不绕过登录、同源和权限校验；带 `--metadata` 的 `review` 离线渲染与 `collect` 不要求 browser-session，`review`/`collect` 均不支持 emit。不带 metadata 的 review 仍从浏览器读取 snapshot，需要真实会话。`paperflow.py` 与兼容 `paperflow_base.py` 的正常浏览器后端均支持 playwright/agent-browser；本节 batch-url、emit、collect 和新增命令以主入口 `paperflow.py` 为准。
 
@@ -29,13 +29,17 @@ python3 <技能目录>/scripts/paperflow.py --batch-url <本次记录链接> --b
 python3 <技能目录>/scripts/paperflow.py --batch-url <本次记录链接> --checkpoint <受控目录/cp.json> --emit-script <受控目录/step.js> run
 ```
 
-读取生成文件，将整个 JS 表达式原样交给现有浏览器 evaluate。取 evaluate **业务表达式返回的完整 JSON envelope** 原样保存到受控 `browser-result.json`；工具外层包装、截图或 compact 摘要不能当业务结果。再离线回收：
+生成结果包含engine_file、engine_id与script_file。首次或页面导航后，先将engine_file交给同源授权浏览器evaluate，取得engine_loaded，再执行script_file；同页面、同engine_id的后续步骤只读/执行小步骤文件，不反复读取或向模型展开完整引擎。engine_not_loaded/next_action=evaluate_bootstrap_file表示尚未加载，未请求业务接口，补加载后继续原小步骤，不重建任务。引擎仅驻浏览器内存，不保存凭证；导航/重新登录后须重新加载。
+
+执行小步骤后，取evaluate **业务表达式返回的完整JSON envelope** 原样保存到受控browser-result.json；engine_loaded只是加载回执，工具外层包装、截图或compact摘要均不能当业务结果。再离线回收：
 
 ```bash
 python3 <技能目录>/scripts/paperflow.py --batch-url <本次记录链接> --checkpoint <受控目录/cp.json> --output <受控目录/result.json> collect --result <受控目录/browser-result.json>
 ```
 
-collect 不访问浏览器、不重新执行或再次验证业务，校验布尔 ok 及 checkpoint.origin/batch_id 一致后回存 checkpoint、完整 output 并输出 compact。保留完整浏览器结果中的 checkpoint，下一轮生成脚本复用该文件。emit 即使带 `--follow` 也只运行一轮 timeout 预算，不会持续后台跟进；waiting 时先 collect 保存结果，再按当前状态生成下一轮，不重复启动任务。跨轮自动等待由智能体管理，每阶段沿用本轮墙钟累计预算（默认与普通 follow 一致为600秒，可按用户明确需要调整），不能每次单轮重置；这不是 CLI emit 已实现的全局预算。正常 running 且进度暂不变本身不是失败证据，沿既定预算等待；只有明确重复错误或不可恢复诊断才提前停止。累计到限即结束本轮，报告“处理中/检查未完成”、进度、链接与原 checkpoint，下次仍接续原 batch，不无限轮询、重传或假报 ready；不按固定轮数机械判定失败。
+collect不访问浏览器、不重新执行或再次验证业务，校验布尔ok及checkpoint.origin/batch_id一致后回存checkpoint、完整output并输出compact。保留完整结果中的checkpoint，下一轮生成小步骤复用；正常CLI后端直接运行，不需手动引擎加载。只有现有执行器确需旧兼容形式时加全局`--standalone-script`，生成自包含步骤；这不改变权限或预算。
+
+emit即使带--follow也只运行一轮timeout预算，不持续后台跟进；waiting先collect再生成下一轮，不重复启动。各轮沿用该阶段本轮墙钟累计预算（默认600秒，可按用户明确需要调整），不每轮重置；这不是CLI emit已实现的全局预算。正常running且进度暂不变本身不是失败证据，沿预算等待，只有明确重复错误或不可恢复诊断才提前停止。到限交付“处理中/检查未完成”、进度、链接与原checkpoint，下次续原batch，不无限轮询、重传或假报ready，不按固定轮数判失败。
 
 emit 结果已 collect 且有本地原 PDF 时，可直接复用元数据生成校对包，无须再读浏览器：
 
@@ -45,17 +49,24 @@ python3 <技能目录>/scripts/paperflow.py --batch-url <本次记录链接> rev
 
 metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 result.review；必须匹配本次 batch_id，并严格核验原 PDF SHA。生成图仍标 reviewed=false，须实际审图。
 
-默认 stdout 是紧凑 JSON，保留下一步摘要与路径，省去完整 checkpoint、调用明细和大块几何；`--output` 保存完整 envelope，只有诊断需要才 `--verbose`。`snapshot --output <JSON>` 位于子命令后，保存裸 snapshot；与全局 output 不同。完整文件留在受控目录，按需读取字段，不反复整份送入上下文。timeout 为单轮预算，正常后端 `run --follow --max-seconds` 为跨 waiting 的有界跟进预算，都不是服务端完成承诺。
+默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
 
-`ok`/退出码只说明工具执行，业务完成看 outcome、`completion`、`remaining`、ready、submitted 与真实全批覆盖，不能只取原始 preflight.ready。主入口没有 upload/session/watch；新上传、grading 和未支持阶段按原技能。新 PDF 用现有文件工具/页面上传后接 CLI。兼容 `paperflow_base.py` 的 session/upload/check 按自身 help；upload 仅 scan，agent-browser 后端返回 `upload_requires_native_browser_file_tool`，不假造成功。
+`ok`/退出码只说明工具执行，业务完成看outcome、completion、remaining、顶层ready/submitted与真实全批覆盖，不只取原始preflight.ready。upload经FormData创建，scan/grading均由run按真实阶段推进；原生文件工具只向接口环境注入PDF，不默认点击上传表单。旧兼容入口的能力以自身help为准，不据此限制主入口的新命令。
 
 | 命令 | 用途与边界 |
 | --- | --- |
 | `access` | 只读当前批阅台身份及课堂会话，不调用模型能力；返回 principal、classroom_valid 与访问诊断，将非敏感身份回执保存到 checkpoint，身份/学校变化时停写；支持 emit |
 | `relogin` | 命令执行时启动平台既有强制登录导航，授权链接仅在浏览器内存中使用；emit 仅生成，evaluate 执行后才导航。导航已启动不等于恢复成功，之后须回原 origin 用 access 核验 |
 | `roster` | 一次读批次与名单，输出 revision、papers、linked/unlinked 及未关联卷的份号/PDF页码/姓名状态/原图定位；同名候选仅来自已有识别名，不提供剩余名单猜人；支持 emit |
+| `classes --source teaching或general [--grade <值> --subject-id <ID> --course-id <ID>]` | 读取当前允许教学/通用目录，按真实年级、学科、课程逐级选；不保存范围 |
+| `class-students --class-id <ID> [同scope查询参数]` | 只读预览当前目录允许班级的真实名单，不关联学生 |
+| `scope --plan <JSON>` | 计划含当前roster revision、真实semester_id/class_ids/scope与证据，保存本批范围；不能录入后擅换班 |
+| `upload --file <PDF> --pages-per-paper <N> --key <固定键> --workflow scan或grading --engine llm或xueersi或doubao [其他模式/纸张参数]` | 同源FormData接口上传；三种业务模式，固定幂等键、超时查原上传；原生工具仅注入文件，不导出认证材料 |
+| `api-list [--operation <名称>]` | 离线列出受限registry的功能、路径、查询及必要字段，不访问业务服务 |
+| `api-call --operation <名称> [--plan <JSON>]` | 按已登记操作定点读写；GET不要求证据，写入要求真实证据/当前版本；禁止任意URL，special操作走专用命令 |
+| `sync --plan <JSON> --authorize-sync` | 仅用户本次已明确同步时提交或恢复原导入；开关不增加用户授权，默认检查命令绝不提交 |
 | `run [--plan <JSON>] [--review-pdf <PDF> --review-out <DIR>] [--follow --max-seconds 600]` | 按真实阶段推进；waiting 可有界等待，审图、目录校对、失败或终点返回。成对 review 参数复用当前读取生成校对包 |
-| `snapshot [--output <裸snapshot JSON>]` | 读批次/catalog，给源 PDF SHA、版本、完整框与精简目录（正文、稳定选项 ID、blank_ids、answers/extras）；reviewed=false 不证明看过图 |
+| `snapshot [--output <裸snapshot JSON>]` | 读批次/catalog，给源PDF SHA、read_version等版本、完整框与精简目录（正文、稳定选项ID、blank_ids、answers/extras）；reviewed=false不证明看过图 |
 | `review [--metadata <JSON>] --pdf <原PDF> --out <受控目录>` | 带 metadata 则复用已保存元数据离线渲染，不访问浏览器、不需会话；省略则从浏览器取 snapshot。核验 batch_id 和 PDF SHA，生成全参考页、接触表与 review.json，需 pymupdf/Pillow；仍 reviewed=false |
 | `frames --edits <JSON> [--confirm]` | 本地整包校验 set/shift/split/promote_children，最多一次 PATCH，再按需确认；预切正常、题框非空且实际已审无修改时可 operations=[]，零 PATCH；失败/空框不能批准。保存与确认不是跨请求事务 |
 | `catalog --plan <JSON>` | 确认已审目录及本批处理范围，回读真实完整 questions，agent 不必复制富题对象；不修改目录，不提交课堂。run 根 plan.catalog 同效 |
@@ -69,18 +80,62 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 | `usage` | 缺失 usage 保持 null、tokens_complete=false，不以零补齐 |
 | `collect --result <完整浏览器业务JSON>` | 离线校验并回存 emit 执行结果，不执行浏览器或改变业务 |
 
+## 目录、上传与文件注入
+
+先access，再用classes读取本次真实目录；teaching使用教学课程，general按grade、subject-id、course-id逐级读取。class-students使用同一组scope参数核对允许班级名单。多候选需用户决定时集中问业务选择，不让老师填写ID或工具参数。
+
+scope计划与run.scope结构相同：当前revision、semester_id、class_ids、scope对象及evidence_confirmed/evidence_note。scope.source为teaching或general；general还须真实grade/subject_id/course_id。现有批次先读roster取revision；新上传可给`--scope-plan <JSON>`，工具在创建或恢复原batch后读取它的当前revision再绑定，不把旧batch版本套到新记录。保存后回读名单与范围，录入后不擅换班。
+
+upload必须提供全局`--checkpoint <受控JSON>`、本地PDF、每份页数和固定key；key为8–100位字母/数字/下划线/连字符。模式参数如下，不省略真实业务选择：
+
+| 业务模式 | upload参数 |
+| --- | --- |
+| 已批教师卷扫描 | `--workflow scan --engine llm`，不加has-answer-paper；默认scan_fast，只有本次既定设置需要才用`--full-scan` |
+| 供应商快速批改 | `--workflow grading --engine xueersi`或doubao；仅用户明确第一份答案卷时加`--has-answer-paper`；`--analysis-fast`仅保留该模式既有整理设置 |
+| 答案卷智能批改 | `--workflow grading --engine llm --has-answer-paper --model <当前允许模型>`；第一整份为等长答案卷，至少再有一份学生卷 |
+
+纸张参数为`--paper-size A4或A3 --orientation portrait或landscape --paper-sides single或double`。每份1–12页，double须偶数，文件不超过100MB/600页，总页数可整除，不静默删页、补页或换模式。模型与供应商能力只在对应阶段核实。
+
+```bash
+python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --browser-backend playwright --browser-session <真实会话> --checkpoint <受控目录/upload.json> --output <受控目录/upload-result.json> upload --file <原PDF> --pages-per-paper <真实页数> --key <本次固定键> --workflow scan --engine llm --scope-plan <受控目录/scope.json>
+```
+
+上传经当前授权浏览器的FormData接口执行，不导出认证材料或把PDF改成base64注入。playwright wrapper默认只为本次创建隐藏`#paperflow-upload`，用原生setInputFiles注入并清理；已有实际input可用`--file-input-selector <已核实选择器>`。其他现有工具只负责原生文件注入，再执行生成的接口脚本，不默认导航或点击上传表单。
+
+emit路径仍加`--emit-script <JS>`，支持三种模式；生成不上传。执行时输入控件未绑定文件返回needs_file_binding，先用该产品已有原生文件工具绑定同一PDF，再执行/collect，不手写文件请求。先查`GET /api/uploads/{key}`，已completed恢复原batch；deleted不自动重建。超时或scope失败保留upload_receipt，继续同key查原状态；upload_uncertain先查状态，不换key或盲重传。uploaded仅表示创建/恢复与必要scope绑定，不等于批改、检查或同步完成。
+
+## 受限接口调用
+
+api-list离线列出83项操作的purpose、method/path、允许query、required、transport和模式限制；按操作名查 [API参考](api.md)，不为正常使用读内部源码。api-call仅按registry生成同源路由，params只填路径中除bid外的真实参数；B路由的bid取当前batch。GET计划可为`{params:{...},query:{...}}`，无需证据；不需要参数时可省略plan。artifact返回artifact_location、真实url、downloaded=false，只给位置，仍需实际读取必要图证。
+
+写计划增加body（仅JSON传输）、`evidence_confirmed:true`和非空evidence_note；transport=empty的操作完全不传body，不用`{}`替代。review类写入还须`expected.read_version`与当前full analysis的read_version一致，工具才运行时注入review_token；task-stop须body.kind和`expected.started_at`匹配当前任务再运行时取控制token。其他操作按真实revision/source_version等字段核对。任何token都禁止人工填入计划或输出。
+
+GET返回api_result/data；成功写入返回api_saved/data，PATCH/PUT另附权威readback。stdout大结果为摘要，核实具体持久化字段时从全局--output的完整去凭证结果读取，不能把摘要缺字段误判为服务端未返回。HTTP200不代表后续任务或全批业务完成。upload、目录确认及imports属于special操作，普通api-call返回dedicated_command_required，分别用upload/catalog/sync，不改registry或手写请求绕过。只有用户本次明确接续时才在适用启动/恢复计划写resume_authorized=true；只读请求不恢复停止任务。
+
+## grading编排与明确同步
+
+run先读live-state/task-control；活跃原始批改返回waiting_for=grading，正在停止返回task_stop或grading_stop，按既定预算等待持久化完成，不抢启新任务。已停止/暂停仅本次明确要求接续时在run计划根给`resume_authorized:true`；该标记体现已有授权，不向老师新增审批。供应商批改done后沿用统一organizer的参考卷、题框、目录边界；LLM用prepare-analysis，不要求选择参考卷或传reference_student_id。
+
+needs_grading_recovery按failed定位缺失/失败卷；`grading_retry:{paper_ids:[本次真实卷ID],evidence_confirmed:true,evidence_note:必要诊断}`只派未done范围，保留人工结果，不把整理重试当原始批改重试。已有done不默认重批；用户本次另有明确重批要求时才按受限grading-retry契约处理保护，不清人工标记绕过。
+
+sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划：revision、source_version、evidence_confirmed/evidence_note、reference_reviewed/scope_reviewed/catalog_reviewed均true、accepted_warning_ids为经审查的最新真实warning集合。这些审查标记只在实际完成对应核验后填写；LLM的reference_reviewed对应实际标准题/答案卷来源核验，不虚构参考学生卷。工具运行时重做全批check和preflight，精确核对配置/来源/warnings后提交，检查token只留内存。
+
+已有attempt默认只读；明确继续原同步时计划给`resume_attempt_id`且必须等于原attempt，不能自动重投。synchronization_accepted或synchronization_resumed只表示已受理/已恢复；用imports/sync-progress有界观察原任务至SUCCEEDED，再用import-links取真实链接。已SUCCEEDED不覆盖。默认run/check及普通api-call绝不提交课堂，不把开关或ready当用户授权。
+
 ## 按返回边界推进
 
 先 `access` 核验当前身份、学校和课堂会话，再运行 `run --follow`（emit 路径按单轮生成/执行/collect），复用已有校对包与计划。等待、标准JSON序列化和状态读取交给内置工具，不逐轮 snapshot/roster、翻压缩源码、猜字段/路由或手写 fetch/XHR。工具返回不足时先读 help 与诊断；确有未覆盖契约时才按 [接口参考](api.md) 补最小必要读取。轮询结果只在阶段变化、阻塞或交付时向老师简报。
 
 | 返回边界 | 智能体下一步 |
 | --- | --- |
-| `needs_reference` | 按主文规则，依据真实清晰度、完整性与教师批注选本批参考卷；写 reference_student_id 后继续。返回前五份 id/index/pdf_pages/原图URL，供轻量取证；没有评分就不能编造高正确率，不把摘要当业务范围 |
+| `needs_reference` | 按真实清晰度、完整性与教师批注选本批参考卷，写reference_student_id后继续。若全批已有完整已知verdict，候选按现成正确率排序；否则仍取前几份轻量比较，不增加识别调用。candidates含id/index/pdf_pages/原图URL，correct_rate仅在有真实统计时使用，范围0–1，不把缺失当零或凭空编百分比；候选摘要不是处理范围 |
+| `needs_file_binding`、`upload_uncertain` | 前者只补原生文件绑定后执行既有脚本；后者查原key状态并保留upload_receipt，不改文件/参数或盲重传 |
+| `needs_grading_recovery`、`needs_analysis_recovery` | 按真实failed/诊断定位原批改或后续整理缺口，分别采用适用的定点恢复计划，不切模式、重跑done或把部分范围当完成 |
 | `needs_precut_recovery` | 先看 diagnosis 的 code、failed_pages、issues、frame_revision、retryable_pages；空框/失败页不能当 `needs_frame_review`。只使用 CLI 返回的 retryable_pages；空框时列表可能来自已核实的每份页数，不代表各页已确认失败。选定具体页、核实证据后只重试该页，不能自动全页重试。缺配置、不可恢复或同因持续失败时报告诊断并保留恢复点，不重复空跑 |
 | `needs_frame_review` | 复用 run 生成的 review 包，实际核对全部参考页，一次整理必要框修改，再应用并确认。没有包且已有本地原 PDF 时才单独 review，已有元数据优先 --metadata 离线复用；已有链接无本地 PDF 时按原技能读取参考页，不索要或重传原卷 |
-| `needs_catalog_review` | 一次读取精简目录正文、选项 ID 与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先按真实接口/页面保存并回读新版本，实际审完后用 catalog --plan 确认，再 run |
+| `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先用catalog-save-draft/review接口保存并回读新版本，实际审完后用catalog --plan确认，再run |
 | `needs_targeted_recovery`、partial/failed 或检查阻塞 | 先读具体失败与 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |
-| `needs_duplicate_review` | 本次范围存在重复学生卷；依据真实证据确定取舍，使用实际页面/接口处理，不自动任选、不提交确认 |
+| `needs_duplicate_review` | 本次范围存在重复学生卷；依据真实证据确定取舍，按当前范围确认契约处理，不自动任选、不提交确认 |
 | `identity_pending` | 全批仍有未关联卷；复用 roster 对账定位，清楚身份有证据才整包关联，模糊者直接暂留。保留 remaining 中媒体/结构/范围等其他未完成项，不把 subset ready 或补姓名当作全批通过 |
 | `waiting` | 任务仍在进行；`waiting_for=media` 表示媒体准备仍在运行，也可正常 follow。沿用原计划与 checkpoint，或按 emit/evaluate/collect 单轮接续；emit 各轮共用该阶段本轮累计墙钟预算，不重置。正常 running 的进度暂不变仍等待，只有明确重复错误或不可恢复诊断才提前停止；到限时交付处理中/未完成、进度、链接和原 checkpoint，不重复启动任务 |
 | `source_stale` | 核实来源变化与版本，重新判断受影响范围，不重批已有人工结果 |
@@ -103,7 +158,7 @@ operations 支持：
 
 `frames --confirm` 或 run 计划根的 frames 使用同一计划。run 根还可有 scope、associations、expected_leaf_labels、reference_reviewed。确认后仍可能停在目录待审，不代替目录保存或 merge-preflight/confirm-and-start。
 
-**独立计算题。** N 个独立算式最终必须是 N 道可分别查看/订正的业务叶题，不是 N 框仍一题、N 个空或组合题。填写本次真实 expected_leaf_labels，CLI 会保存并续验粒度目标；核对叶题标签/数量、parent_id=null，排除 content.children、composite/virtual_parent、is_composite/isComposite、business_question.isComposite 及业务题型目录 isComposite 所代表的合题，且无额外父标题题。`expected_granularity_verified` 只是一项程序核对，不能替代实际目录和页面核验。
+**独立计算题。** N个独立算式最终必须是N道可分别查看/订正的业务叶题，不是N框仍一题、N个空或组合题。填写真实expected_leaf_labels，CLI保存并续验粒度目标；核对叶题标签/数量、parent_id=null，排除content.children、composite/virtual_parent、is_composite/isComposite、business_question.isComposite及题型目录isComposite所代表的合题，且无额外父标题题。expected_granularity_verified只是程序核对，不能替代实际目录与必要图证核验。
 
 **关联。** 计划为 `{revision:实时roster版本,assignments:[{paper_id,student_id,evidence_confirmed:true,evidence_note:必要证据摘要}]}`。初次常规查看已有清楚卷面与名单证据的整包应用，脚本中的 true 不是证据。第一次常规查看已模糊或未识别者直接暂留，不放大、新增 OCR、换识别方式或凭剩余名单试探；用户提供新证据或本次明确要求重新识别时，按其范围重新判断，仍不猜人。`roster` 的 exact_name_candidates 只是已有识别名的同名列表，不构成身份确认。继续不依赖该身份的允许步骤，run 在 completed 阶段才应用 associations，其他真实阶段按原技能处理，不能改 scope 求通过。
 
@@ -111,7 +166,7 @@ operations 支持：
 
 `catalog --plan` 或 run 根 `catalog` 计划含：operation_id（8–100个字母、数字、下划线或连字符，匹配 `^[A-Za-z0-9_-]{8,100}$`）、当前 source_pdf_sha256/reference_student_id/frame_revision/catalog_revision、`reference_reviewed:true`、`scope_reviewed:true`、`catalog_reviewed:true`、覆盖全部相对页的 reviewed_pages，可含本次 expected_leaf_labels。这些标记只能在实际审图、审范围与审目录后填写，不能作为自动验收证明。
 
-命令回读服务端完整真实 questions 用于确认；不负责目录内容修改/保存。需要修改时先用真实编辑接口/页面，回读新 revision、复核后再给新计划，不能复用旧已审标记。v2 仅当前记录 `source_ids=[]` 走 merge-preflight 和 confirm-and-start；有重复返回 needs_duplicate_review，不确认。旧 confirm 仅真实版本允许时使用。目录确认不是课堂 imports，`submitted=false`；accepted 仍须观察原任务完成。
+命令回读服务端完整真实questions用于确认；不负责内容编辑。需要修改先用受限catalog-save-draft/review，回读新revision、复核后再给新计划，不能复用旧已审标记。v2仅当前记录source_ids=[]走merge-preflight和confirm-and-start；有重复返回needs_duplicate_review，不确认。旧confirm仅真实版本允许时使用。目录确认不是课堂imports，submitted=false；accepted仍须观察原任务完成。
 
 checkpoint 保留目录确认中/已接受的有限回执。确认超时先只读查原操作与当前目录状态，不循环预检、换 operation_id/幂等键重发；版本/来源变化必须重新判断。未经用户修改却同因409持续发生时按下文有限恢复停止。
 
@@ -125,7 +180,7 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 - 逐空题：`blanks:[{blank_id,answer_text,answer_state:"answered"或"unanswered"}]`，必须覆盖真实 blank_ids 的全部空位；不能用合并全文或逗号切分猜逐空答案。
 - 主观题：`answer_text`，仅填原卷证据支持的实际作答。
 
-该命令仅支持单个互动元素；复杂或不支持的结构按真实页面/接口处理，不改题型绕过。它先校验整计划的源、版本、题目和证据字段，再顺序 PATCH `response_only:true`，保持教师判定；新的 review_token 仅在内存中随服务端响应传递，不写计划或日志。客户端确认标记不替代真实审卷。
+该命令仅支持单个互动元素；复杂结构先查question-review/correction-save等已登记接口的真实契约，确无支持才定点回退或报告，不改题型绕过。它先校验整计划的源、版本、题目和证据，再顺序PATCH response_only:true，保持教师判定；review_token仅在内存随响应传递，不写计划或日志。客户端标记不替代真实审卷。
 
 失败后先用 evidence 回读实际已保存范围与当前版本，再拟剩余计划，不能原样重放全包。422 读取 detail 修正真实字段，不反复发送同一无效请求，不直接改库；该命令不提供事务或 exactly-once。修复后重新 run/check，以最新真实全批检查为准。
 

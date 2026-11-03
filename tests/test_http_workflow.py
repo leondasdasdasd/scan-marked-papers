@@ -125,7 +125,7 @@ class HttpWorkflowTests(unittest.TestCase):
                 def step(plan=None, action='run'):
                     path = directory/'plan.json';path.write_text(json.dumps(plan))
                     script = directory/'run.js'
-                    emitted = command('--emit-script', str(script), action, *(['--plan', str(path)] if plan else []))
+                    emitted = command('--standalone-script','--emit-script', str(script), action, *(['--plan', str(path)] if plan else []))
                     self.assertFalse(emitted['result']['executed'])
                     bootstrap = ('global.location={origin:'+json.dumps(origin)+'};'
                         'const actualFetch=global.fetch;global.fetch=(p,o)=>actualFetch(new URL(p,location.origin),o);'

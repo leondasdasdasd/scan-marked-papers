@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -30,8 +31,29 @@ class ScriptEntryTests(unittest.TestCase):
             self.assertEqual(data['result']['origin'], 'https://example.test')
             text = script.read_text()
             self.assertNotIn('__LEGACY__', text)
-            self.assertTrue(text.endswith('})'))
+            self.assertLess(len(text.encode()),3000)
+            self.assertTrue(Path(data['result']['engine_file']).exists())
+            self.assertIn('engine_not_loaded',text)
             self.assertEqual(script.stat().st_mode & 0o777, 0o600)
+
+    def test_cached_engine_executes_repeated_small_steps_without_business_page_actions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);step=root/'step.js'
+            code,data=self.run_cli(['--base-url','https://example.test','--emit-script',str(step),'classes'])
+            self.assertEqual(code,0)
+            engine=Path(data['result']['engine_file'])
+            runner=r"""
+const fs=require('fs');global.location={origin:'https://example.test'};let requests=0;
+global.fetch=async(path,opts)=>{if(path!=='/api/classroom/classes'||opts.method!=='GET')throw Error('unexpected');requests++;return {ok:true,status:200,json:async()=>({semester_id:'1',classes:[]})};};
+(async()=>{const step=fs.readFileSync(process.argv[2],'utf8');const first=await eval(step);if(first.error?.code!=='engine_not_loaded'||requests)throw Error('must load engine first');
+const loaded=eval(fs.readFileSync(process.argv[3],'utf8'));if(!loaded.ok)throw Error('load failed');
+for(let i=0;i<3;i++){const d=await eval(step);if(!d.ok||d.result.outcome!=='class_directory')throw Error('step failed');}
+if(requests!==3)throw Error('repeated business actions');location.origin='https://other.test';const wrong=await eval(step);if(wrong.error?.code!=='origin_mismatch')throw Error('cross origin');
+console.log(JSON.stringify({step_bytes:Buffer.byteLength(step),requests}));})();
+"""
+            result=subprocess.run(['node','-',str(step),str(engine)],input=runner,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertLess(json.loads(result.stdout)['step_bytes'],3000)
 
     def test_conflicting_link_or_nonbusiness_path_rejects_before_browser(self):
         samples = [

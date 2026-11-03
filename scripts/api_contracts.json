@@ -1,0 +1,993 @@
+{
+  "schema_version": 1,
+  "operations": [
+    {
+      "name": "session",
+      "method": "GET",
+      "path": "/api/session",
+      "query": [
+        "refresh_profile",
+        "include_models"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取当前批阅台身份、学校、供应商配置及按需模型能力。"
+    },
+    {
+      "name": "login-check",
+      "method": "GET",
+      "path": "/api/classroom/login-check",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "核验批阅台、云谷与课堂会话及账号一致性，不返回凭证。"
+    },
+    {
+      "name": "classes",
+      "method": "GET",
+      "path": "/api/classroom/classes",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取当前教师可用的教学课程、学期与班级目录。"
+    },
+    {
+      "name": "general-options",
+      "method": "GET",
+      "path": "/api/classroom/general-options",
+      "query": [
+        "grade",
+        "subject_id",
+        "course_id"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "按年级、学科、课程逐级读取通用教学目录与允许班级。"
+    },
+    {
+      "name": "class-students",
+      "method": "GET",
+      "path": "/api/classroom/classes/{class_id}/students",
+      "query": [
+        "source",
+        "grade",
+        "subject_id",
+        "course_id"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "只读预览指定允许班级的当前学生名单，不写批次关联。"
+    },
+    {
+      "name": "recent-selection",
+      "method": "GET",
+      "path": "/api/classroom/recent-selection",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取并重新验证最近一次课程班级选择，返回有效选择或失效原因。"
+    },
+    {
+      "name": "recent-classes",
+      "method": "GET",
+      "path": "/api/classroom/recent-classes",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取最近使用的课程班级记录及选择上下文，不代替当前权限校验。"
+    },
+    {
+      "name": "batch-list",
+      "method": "GET",
+      "path": "/api/batch-summaries",
+      "query": [
+        "limit",
+        "cursor",
+        "scope",
+        "page",
+        "mode",
+        "semester_id",
+        "class_id",
+        "period",
+        "date_start",
+        "date_end",
+        "grade",
+        "subject_id",
+        "course_id"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "按权限、时间、模式和课程班级筛选分页查找已有批改记录。"
+    },
+    {
+      "name": "upload-status",
+      "method": "GET",
+      "path": "/api/uploads/{key}",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "按原幂等键查上传是否已形成批次，用于超时恢复。"
+    },
+    {
+      "name": "upload",
+      "method": "POST",
+      "path": "/api/batches",
+      "query": [],
+      "required": [],
+      "transport": "multipart",
+      "special": "upload",
+      "purpose": "以FormData上传PDF并按指定模式和每份页数创建批次。"
+    },
+    {
+      "name": "batch",
+      "method": "GET",
+      "path": "/api/batches/{bid}",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取本次批次、学生卷、原模式、分卷与版本等元数据。"
+    },
+    {
+      "name": "live-state",
+      "method": "GET",
+      "path": "/api/batches/{bid}/live-state",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "合并读取批改进度、任务控制、分析版本与分析状态。"
+    },
+    {
+      "name": "progress",
+      "method": "GET",
+      "path": "/api/batches/{bid}/progress",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "轻量读取本次批改与学生进度，供有界等待。"
+    },
+    {
+      "name": "task-control",
+      "method": "GET",
+      "path": "/api/batches/{bid}/task-control",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取批改和分析任务状态、停止能力与运行时控制令牌。"
+    },
+    {
+      "name": "diagnostics",
+      "method": "GET",
+      "path": "/api/batches/{bid}/diagnostics",
+      "query": [
+        "before",
+        "limit"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取批次的诊断与异常定位信息，不重跑任务。"
+    },
+    {
+      "name": "model-usage",
+      "method": "GET",
+      "path": "/api/batches/{bid}/model-usage",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取已有模型调用与用量记录，缺失用量保持未知。"
+    },
+    {
+      "name": "roster",
+      "method": "GET",
+      "path": "/api/batches/{bid}/roster",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取批次课程班级、当前名单、卷与学生关联及revision。"
+    },
+    {
+      "name": "scope-save",
+      "method": "PUT",
+      "path": "/api/batches/{bid}/roster",
+      "query": [],
+      "required": [
+        "revision",
+        "semester_id",
+        "class_ids",
+        "scope"
+      ],
+      "transport": "json",
+      "purpose": "按当前revision保存本次课程、班级和名单范围。"
+    },
+    {
+      "name": "associate",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/roster/{paper_id}",
+      "query": [],
+      "required": [
+        "revision",
+        "student_id"
+      ],
+      "transport": "json",
+      "purpose": "将一份试卷关联到已核实学生，或显式解除关联。"
+    },
+    {
+      "name": "student",
+      "method": "GET",
+      "path": "/api/batches/{bid}/students/{sid}",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取一份原批改学生卷与结果，不拉全部供应商明细。"
+    },
+    {
+      "name": "provider-results",
+      "method": "GET",
+      "path": "/api/batches/{bid}/students/{sid}/provider-results",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取一份供应商批改原始明细，供定点复核。"
+    },
+    {
+      "name": "grading-start",
+      "method": "POST",
+      "path": "/api/batches/{bid}/start",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "modes": [
+        "grading"
+      ],
+      "purpose": "校验名单与能力后启动或接续缺失的原始批改。"
+    },
+    {
+      "name": "answers-extract",
+      "method": "POST",
+      "path": "/api/batches/{bid}/answers/extract",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "modes": [
+        "grading"
+      ],
+      "purpose": "仅智能批改读取前置答案卷，完成后供核对模板。"
+    },
+    {
+      "name": "grading-retry",
+      "method": "POST",
+      "path": "/api/batches/{bid}/students/{sid}/retry",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "modes": [
+        "grading"
+      ],
+      "purpose": "重试指定学生的原始批改，可能覆盖其已有批改。"
+    },
+    {
+      "name": "task-stop",
+      "method": "POST",
+      "path": "/api/batches/{bid}/stop",
+      "query": [],
+      "required": [
+        "kind"
+      ],
+      "transport": "json",
+      "runtime_token": "task",
+      "purpose": "请求停止指定批改或分析任务并持久化当前结果。"
+    },
+    {
+      "name": "layout-save",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/layout",
+      "query": [],
+      "required": [
+        "revision",
+        "questions"
+      ],
+      "transport": "json",
+      "modes": [
+        "grading"
+      ],
+      "purpose": "按layout revision仅调整答案模板几何位置，保留题干与空结构。"
+    },
+    {
+      "name": "student-save",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/students/{sid}",
+      "query": [
+        "include_roster"
+      ],
+      "required": [
+        "revision",
+        "identity_only",
+        "name",
+        "name_confirmed"
+      ],
+      "transport": "json",
+      "purpose": "按学生revision修正身份，或在允许的grading模式保存原始结果。"
+    },
+    {
+      "name": "analysis",
+      "method": "GET",
+      "path": "/api/batches/{bid}/analysis",
+      "query": [
+        "view",
+        "include_student",
+        "include_first_student"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "按视图读取标准目录、题框、学生整理与分析版本。"
+    },
+    {
+      "name": "analysis-version",
+      "method": "GET",
+      "path": "/api/batches/{bid}/analysis/version",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "轻量读取分析版本，判断是否需要刷新内容。"
+    },
+    {
+      "name": "analysis-status",
+      "method": "GET",
+      "path": "/api/batches/{bid}/analysis/status",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "轻量读取分析阶段、任务和学生处理状态。"
+    },
+    {
+      "name": "analysis-student",
+      "method": "GET",
+      "path": "/api/batches/{bid}/analysis/students/{sid}",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "按学生读取整理结果与作答，不拉全批答案。"
+    },
+    {
+      "name": "analysis-start",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis",
+      "query": [],
+      "required": [
+        "reference_student_id"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "对scan或供应商批改选择参考卷并启动统一整理。"
+    },
+    {
+      "name": "reference-answers-resume",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis",
+      "query": [],
+      "required": [
+        "resume_reference_answers"
+      ],
+      "transport": "json",
+      "purpose": "按真实恢复阶段接续已整理记录的参考答案补齐。"
+    },
+    {
+      "name": "prepare-analysis",
+      "method": "POST",
+      "path": "/api/batches/{bid}/lesson-practice/prepare-analysis",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "modes": [
+        "grading"
+      ],
+      "purpose": "按当前配置准备LLM批改后的分析，并复用有效快照。"
+    },
+    {
+      "name": "analysis-retry-incomplete",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/retry-incomplete",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "modes": [
+        "grading"
+      ],
+      "purpose": "仅重试非scan整理中页面失败的学生，保留成功页面。"
+    },
+    {
+      "name": "analysis-mode",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/analysis/mode",
+      "query": [],
+      "required": [
+        "analysis_fast"
+      ],
+      "transport": "json",
+      "modes": [
+        "quick"
+      ],
+      "purpose": "切换供应商批改后的整理快慢设置并使旧整理失效。"
+    },
+    {
+      "name": "catalog-save-draft",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/analysis/catalog",
+      "query": [
+        "view"
+      ],
+      "required": [
+        "frame_revision",
+        "catalog_revision",
+        "questions"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "按题框和目录revision保存待确认标准题完整目录。"
+    },
+    {
+      "name": "catalog-save-review",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/analysis/catalog",
+      "query": [
+        "view"
+      ],
+      "required": [
+        "questions"
+      ],
+      "transport": "json",
+      "runtime_token": "review",
+      "purpose": "按运行时review token保存已整理标准题完整目录。"
+    },
+    {
+      "name": "question-types",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/question-types",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "purpose": "将已有标准题目录升级到当前业务题型契约。"
+    },
+    {
+      "name": "frames-save",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/analysis/frames",
+      "query": [],
+      "required": [
+        "frame_revision",
+        "frames",
+        "checked_pages",
+        "current_page"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "在题框待核阶段按revision完整保存题框集合和已核页。"
+    },
+    {
+      "name": "frames-crop",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/crop",
+      "query": [],
+      "required": [
+        "frame_revision",
+        "catalog_revision",
+        "revision",
+        "frames"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "调整已有参考题裁图位置，保留题目身份与教师判定。"
+    },
+    {
+      "name": "frames-relocate",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/relocate",
+      "query": [],
+      "required": [
+        "frame_revision"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "重新定位参考卷题框，保留上次结果供恢复。"
+    },
+    {
+      "name": "frames-confirm",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/confirm",
+      "query": [],
+      "required": [
+        "frame_revision"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "确认已审题框并启动后续目录整理，不提交课堂。"
+    },
+    {
+      "name": "frames-cancel",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/cancel",
+      "query": [],
+      "required": [
+        "frame_revision"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "取消可选的返回改框，恢复此前已保存整理结果。"
+    },
+    {
+      "name": "frames-reopen",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/reopen",
+      "query": [],
+      "required": [
+        "frame_revision"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "返回题框调整并保留原结果，产生新题框版本。"
+    },
+    {
+      "name": "frames-reference",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/reference",
+      "query": [],
+      "required": [
+        "frame_revision",
+        "reference_student_id"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "明确更换参考学生卷并重新定位题框。"
+    },
+    {
+      "name": "frames-retry",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/retry",
+      "query": [],
+      "required": [
+        "frame_revision",
+        "catalog_revision",
+        "question_id",
+        "regions"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "按当前题框与目录版本重识别指定单题区域。"
+    },
+    {
+      "name": "frames-retry-precut",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/retry-precut",
+      "query": [],
+      "required": [
+        "frame_revision",
+        "page"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "仅重试已定位的一个相对页预切。"
+    },
+    {
+      "name": "frames-retry-catalog",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/frames/retry-catalog",
+      "query": [],
+      "required": [
+        "frame_revision"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "按当前题框重新整理参考目录，可能重新调用模型。"
+    },
+    {
+      "name": "catalog-confirm",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/confirm",
+      "query": [],
+      "required": [
+        "frame_revision",
+        "catalog_revision",
+        "questions"
+      ],
+      "transport": "json",
+      "special": "catalog",
+      "purpose": "旧版目录确认入口，仅在真实记录允许时使用。"
+    },
+    {
+      "name": "scope-preflight",
+      "method": "POST",
+      "path": "/api/batches/{bid}/merge-preflight",
+      "query": [],
+      "required": [
+        "source_ids",
+        "frame_revision",
+        "catalog_revision"
+      ],
+      "transport": "json",
+      "special": "catalog",
+      "purpose": "预检当前记录的目录、来源版本与重复学生卷范围。"
+    },
+    {
+      "name": "catalog-confirm-and-start",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/confirm-and-start",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "special": "catalog",
+      "purpose": "用最新范围预检确认已审目录并启动学生整理，不提交课堂。"
+    },
+    {
+      "name": "merge-operation",
+      "method": "GET",
+      "path": "/api/merge-operations/{operation_id}",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取原范围确认操作的受理、持久化与学生处理状态。"
+    },
+    {
+      "name": "question-review",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/analysis/students/{sid}/questions/{qid}",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "runtime_token": "review",
+      "purpose": "按运行时review token定点修正判定或学生作答结构。"
+    },
+    {
+      "name": "review-results",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/students/{sid}/review-results",
+      "query": [],
+      "required": [
+        "results"
+      ],
+      "transport": "json",
+      "runtime_token": "review",
+      "purpose": "按运行时review token保存已复核结果的分数、评语与批注位置。"
+    },
+    {
+      "name": "analysis-reconcile",
+      "method": "POST",
+      "path": "/api/batches/{bid}/analysis/reconcile",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "runtime_token": "review",
+      "purpose": "按运行时review token检查并恢复分析投影一致性。"
+    },
+    {
+      "name": "scan-retry",
+      "method": "POST",
+      "path": "/api/batches/{bid}/scan/students/{sid}/retry",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "仅重试统一整理中指定学生卷，保留其他学生结果。"
+    },
+    {
+      "name": "scan-retry-failed",
+      "method": "POST",
+      "path": "/api/batches/{bid}/scan/retry-failed",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "仅重试统一整理中失败的学生范围。"
+    },
+    {
+      "name": "scan-result-save",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/scan/students/{sid}/questions/{qid}",
+      "query": [],
+      "required": [
+        "revision",
+        "verdict"
+      ],
+      "transport": "json",
+      "modes": [
+        "scan"
+      ],
+      "purpose": "按扫描结果revision保存已核实的单题教师判定。"
+    },
+    {
+      "name": "response-regions-save",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/scan/students/{sid}/questions/{qid}/regions",
+      "query": [],
+      "required": [
+        "revision",
+        "regions"
+      ],
+      "transport": "json",
+      "modes": [
+        "organizer"
+      ],
+      "purpose": "按分析revision调整一名学生的一道题作答裁图区域。"
+    },
+    {
+      "name": "sync-options",
+      "method": "GET",
+      "path": "/api/lesson-practice/options",
+      "query": [
+        "grade_id",
+        "subject_id",
+        "course_id",
+        "batch_id"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取当前课程班级范围允许的同步目录和业务题型。"
+    },
+    {
+      "name": "sync-courses",
+      "method": "GET",
+      "path": "/api/lesson-practice/courses",
+      "query": [
+        "grade_id",
+        "subject_id"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "按真实年级与学科读取可用同步课程。"
+    },
+    {
+      "name": "sync-config",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/config",
+      "query": [
+        "view"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取同步配置、来源版本、标准题与选择上下文。"
+    },
+    {
+      "name": "sync-config-save",
+      "method": "PUT",
+      "path": "/api/batches/{bid}/lesson-practice/config",
+      "query": [],
+      "required": [
+        "revision",
+        "grade_id",
+        "subject_id",
+        "course_id",
+        "semester_id",
+        "type_mapping",
+        "class_mapping",
+        "selected_paper_ids"
+      ],
+      "transport": "json",
+      "purpose": "按revision保存真实目录映射与本批全量同步范围。"
+    },
+    {
+      "name": "correction-item",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/corrections/item",
+      "query": [
+        "paper_id",
+        "question_id"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取指定卷题的同步校对详情、来源与当前版本。"
+    },
+    {
+      "name": "correction-save",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/lesson-practice/corrections/item",
+      "query": [],
+      "required": [
+        "revision",
+        "source_version",
+        "question_id"
+      ],
+      "transport": "json",
+      "purpose": "按配置revision与source version保存单题同步校对内容。"
+    },
+    {
+      "name": "correction-bulk-verdict",
+      "method": "PATCH",
+      "path": "/api/batches/{bid}/lesson-practice/corrections/bulk-verdict",
+      "query": [],
+      "required": [
+        "revision",
+        "source_version",
+        "targets",
+        "verdict",
+        "confirmed"
+      ],
+      "transport": "json",
+      "purpose": "按版本与明确目标批量保存已核实判定，不自动消除未知。"
+    },
+    {
+      "name": "preflight",
+      "method": "POST",
+      "path": "/api/batches/{bid}/lesson-practice/preflight",
+      "query": [],
+      "required": [
+        "revision"
+      ],
+      "transport": "json",
+      "purpose": "执行真实同步检查并保存当前教师检查状态，不提交课堂。"
+    },
+    {
+      "name": "prepare-media",
+      "method": "POST",
+      "path": "/api/batches/{bid}/lesson-practice/prepare-media",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "purpose": "启动或复用本批既定同步媒体准备，不提交课堂。"
+    },
+    {
+      "name": "media-status",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/media-preparation",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取当前媒体准备进度、错误与可恢复状态。"
+    },
+    {
+      "name": "sync-progress",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/progress",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取当前准备任务与已有导入任务，不提交或恢复导入。"
+    },
+    {
+      "name": "sync-prepare",
+      "method": "POST",
+      "path": "/api/batches/{bid}/lesson-practice/progress/start",
+      "query": [],
+      "required": [
+        "revision"
+      ],
+      "transport": "json",
+      "purpose": "启动或复用同步前异步准备，最终仍需真实检查。"
+    },
+    {
+      "name": "imports",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/imports",
+      "query": [
+        "check_source"
+      ],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取已有课堂导入任务及可选的来源变化状态。"
+    },
+    {
+      "name": "import-submit",
+      "method": "POST",
+      "path": "/api/batches/{bid}/lesson-practice/imports",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "special": "sync",
+      "purpose": "仅在本次明确授权同步后用最新检查提交课堂导入。"
+    },
+    {
+      "name": "import-resume",
+      "method": "POST",
+      "path": "/api/batches/{bid}/lesson-practice/imports/{aid}/resume",
+      "query": [],
+      "required": [],
+      "transport": "empty",
+      "special": "sync",
+      "purpose": "仅在本次明确授权同步后接续原导入任务，不新建重投。"
+    },
+    {
+      "name": "import-errors",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/imports/{aid}/errors",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "读取原导入任务的真实失败明细。"
+    },
+    {
+      "name": "import-links",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/imports/{aid}/links",
+      "query": [],
+      "required": [],
+      "transport": "json",
+      "purpose": "从成功导入任务取得真实报告与错题本链接。"
+    },
+    {
+      "name": "original",
+      "method": "GET",
+      "path": "/api/batches/{bid}/original",
+      "query": [],
+      "required": [],
+      "transport": "artifact",
+      "purpose": "取得本批原始PDF文件地址供受控下载或必要审图。"
+    },
+    {
+      "name": "page-image",
+      "method": "GET",
+      "path": "/api/batches/{bid}/pages/{page}",
+      "query": [
+        "thumbnail",
+        "student_id",
+        "source_revision",
+        "original"
+      ],
+      "required": [],
+      "transport": "artifact",
+      "purpose": "取得指定原PDF绝对页的原图或供应商矫正卷图。"
+    },
+    {
+      "name": "question-image",
+      "method": "GET",
+      "path": "/api/batches/{bid}/analysis/question-images/{asset}",
+      "query": [],
+      "required": [],
+      "transport": "artifact",
+      "purpose": "取得服务端已生成的标准题图片。"
+    },
+    {
+      "name": "answer-image",
+      "method": "GET",
+      "path": "/api/batches/{bid}/lesson-practice/answer-images/{paper_id}/{qid}/{index}",
+      "query": [],
+      "required": [],
+      "transport": "artifact",
+      "purpose": "取得指定学生卷题的已准备作答裁图。"
+    },
+    {
+      "name": "analysis-export",
+      "method": "GET",
+      "path": "/api/batches/{bid}/analysis/export",
+      "query": [],
+      "required": [],
+      "transport": "artifact",
+      "purpose": "导出当前有效整理结果JSON，不提交课堂。"
+    },
+    {
+      "name": "scan-export",
+      "method": "GET",
+      "path": "/api/batches/{bid}/scan/export.xlsx",
+      "query": [
+        "class_id"
+      ],
+      "required": [],
+      "transport": "artifact",
+      "purpose": "导出当前有效扫描结果工作簿，可按真实班级筛选。"
+    }
+  ]
+}
