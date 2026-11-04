@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import paperflow_base as base
 import paperflow_upload as upload
 import skill_update
+import paperflow_session
 
 ROOT=Path(__file__).resolve().parent
 
@@ -161,6 +162,10 @@ def main():
     parser.add_argument('--verbose',action='store_true')
     sub=parser.add_subparsers(dest='action',required=True)
     for name in ('inspect','check','diagnose','usage','access','relogin','roster'):sub.add_parser(name)
+    p=sub.add_parser('session-connect')
+    p.add_argument('--source-url');p.add_argument('--source-target')
+    p.add_argument('--target-url');p.add_argument('--executable')
+    sub.add_parser('session-status');sub.add_parser('session-close')
     p=sub.add_parser('api-list');p.add_argument('--operation')
     p=sub.add_parser('api-call');p.add_argument('--operation',required=True);p.add_argument('--plan',type=Path)
     for name in ('scope','sync'):
@@ -207,7 +212,8 @@ def main():
         contracts=json.loads((ROOT/'api_contracts.json').read_text())
         if args.operation:contracts['operations']=[o for o in contracts['operations'] if o['name']==args.operation]
         print(json.dumps(contracts,ensure_ascii=False));return 0 if contracts['operations'] else 1
-    batch_optional=args.action in ('upload','classes','class-students','access','relogin','api-call','collect')
+    batch_optional=args.action in ('upload','classes','class-students','access','relogin','api-call','collect',
+                                  'session-connect','session-status','session-close')
     if not args.batch_id and not batch_optional:parser.error('batch-id or batch-url required')
     args.batch_id=args.batch_id or ''
     if args.action=='upload' and not args.checkpoint:parser.error('upload requires checkpoint')
@@ -221,7 +227,7 @@ def main():
     if not 1<=args.timeout<=180 or not 2<=args.interval<=30:parser.error('invalid timeout/interval')
     if args.action=='run' and bool(args.review_pdf)!=bool(args.review_out):parser.error('review-pdf and review-out must be provided together')
     if args.action=='run' and not 1<=args.max_seconds<=3600:parser.error('max-seconds 1..3600')
-    if __name__=='__main__' and args.action not in ('api-list','collect') and not (args.action=='review' and args.metadata):
+    if __name__=='__main__' and args.action not in ('api-list','collect','session-status','session-close') and not (args.action=='review' and args.metadata):
         try:updated=skill_update.ensure(ROOT.parent)
         except Exception:updated={'outcome':'update_failed','error':'update_check_unavailable','updated':False}
         if updated.get('updated'):
@@ -230,6 +236,9 @@ def main():
             print(json.dumps({'ok':False,'error':{'code':'skill_update_in_progress','retry_after_seconds':2}}));return 1
         if updated.get('outcome') in ('update_failed','local_changes_preserved','baseline_missing'):
             print(json.dumps({'skill_update':updated},ensure_ascii=False),file=sys.stderr)
+    if args.action in ('session-connect','session-status','session-close'):
+        result=paperflow_session.invoke(args,args.action.removeprefix('session-'))
+        print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
     try:
         plan_path=getattr(args,'plan',None) or getattr(args,'edits',None)
         plan=json.loads(plan_path.read_text()) if plan_path else None

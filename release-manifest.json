@@ -1,24 +1,26 @@
 {
   "schema_version": 1,
   "repository": "leondasdasdasd/scan-marked-papers",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "files": {
-    "README.md": "8e4339108052c0ef976579013fd0570a5ea50fa89bb75a3f398ac14eef7e8e07",
-    "SKILL.md": "d827e0f5908054c7080eea7dc382d289677789f8ce5a4d9981a8016b263bd3bb",
-    "agents/openai.yaml": "fbd4351e038c5e5bd0cacea8e9ee659ea46d534ae249a8b7fba7b97877148dbc",
-    "references/api.md": "dc9e45d7158b909cbb2319618bfee55dfa29bce3a6827119b54f0c4bea27485a",
-    "references/cli.md": "cadfecfd8f0fb7d7d7e76e15368ae832bdc489f76bb208954132362af571fdf8",
+    "README.md": "ab8feaf93caff7d47af9b315af3a8a73931e6c446f15fc416411fe75127a7db4",
+    "SKILL.md": "5e2735482f7c3af8ee25ff19213b018c9c5390a3194d703c32828c0f9d4cdc3c",
+    "agents/openai.yaml": "354b51e204ba1b4ad4ce6d152ed84989118d59895ecd603581094a073615d9b2",
+    "references/api.md": "59bd1af264e0bf94ae16301fbac2984608ebe4121c84d1a79a095dbe9ccf89d4",
+    "references/cli.md": "691074ff256d97ca4ecfcdf15ca3eff2bed6370d5aa4e224d3c79c461bcfb41e",
     "references/grading.md": "871e3f2d6db9bb9092aee2a0246c28422345dfb9aad4871093f334228c1396f8",
-    "references/office-agents.md": "1e23e4a7b6403a946d330938732d05d7002e255782ddf25f237387b685abfe20",
+    "references/office-agents.md": "d78dcb997ceee1451241e04e2de5ed6a90c31a607e55ce2d8175e9ae1fac92e9",
     "references/skill-update.md": "e538ad2ae378f3e0900d2c46a81d67436b319968f401ea841fb7e0645671025f",
     "references/splitting.md": "d19461b5934e8bb330a508a9caa46562009e625bfe83a513a2a7c5a368f3d5c5",
     "scripts/api_contracts.json": "1ba358e8f145bb57b5908f44dd7a90740c10bd5388d9e21843af1937c42cdfe6",
     "scripts/build_release.py": "2983175da4c45fdb4899da824145425b11a92c8a988ddbadd8ff77930eb8c57e",
     "scripts/paperflow.js": "6ade0d886c9cf2ce6032242b3dac55ea3fbb5626efc684c30bddf3524afd95bf",
-    "scripts/paperflow.py": "bb0a1a973a245b830fde36e91b520c9847e0bc0ff9da89fed908bf7b539b7716",
-    "scripts/paperflow_base.py": "2f586806611dc00d3a9dd13782e2e346495a224e4c769a55907689d8c06012e2",
+    "scripts/paperflow.py": "8d2f3e7149f8b3b2c1465fc95067264a6e5673fa32058224ad3378e89f7655ad",
+    "scripts/paperflow_base.py": "cd865b1e204b765e93698beccd90660415bb7f6786d1e9579a0c6ff00f6400b4",
+    "scripts/paperflow_session.mjs": "0fb662e64006bd6ed84f65067f5dda65bd08de60ce99379334772daae1684e26",
+    "scripts/paperflow_session.py": "5d38c3a0a0e10ac80dc9b25ab75cfb8d83fcf0183ba77a52ad41714b28ee1165",
     "scripts/paperflow_upload.py": "c9717135d7dec64b10dea8588b8b914cb8f3129a27ab059463d5809ba7bb795d",
     "scripts/paperflow_workflow.js": "fdcbe30a2b6c8bc100ecfb3599a35b56ccd1b875afcc7db14eb1c9b5d2cae076",
-    "scripts/skill_update.py": "1e77bc076ff8726c818cf90e8561514134b72a0b1451f0d2241e9a1a33f5ada7"
+    "scripts/skill_update.py": "f2c81655952953e3fb838b485ce55f4c8c0c04888af90bfa6e0c861ae411404d"
   }
 }

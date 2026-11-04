@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental browser-session CLI. No credentials leave the browser context."""
+"""Browser-session transport; isolated authentication is transferred in memory."""
 import argparse
 import json
 import re
@@ -166,12 +166,17 @@ DEFAULT_ORIGIN = 'https://piyue.yungu.org'
 
 
 def browser_options(parser):
-    parser.add_argument('--browser-backend', choices=('playwright','agent-browser'), default='playwright')
+    parser.add_argument('--browser-backend', choices=('playwright','agent-browser','isolated'), default='playwright')
     parser.add_argument('--browser-executable', default='agent-browser')
 
 
 def browser(args, code, expression=None):
     started = time.perf_counter()
+    import paperflow_session
+    if getattr(args, 'browser_backend', 'playwright') == 'isolated' or paperflow_session.available(args):
+        if expression is None:
+            return {'ok':False,'error':{'code':'isolated_expression_required'}}
+        return paperflow_session.invoke(args, 'execute', expression)
     if getattr(args, 'browser_backend', 'playwright') == 'agent-browser':
         if expression is None:
             return {'ok':False,'error':{'code':'upload_requires_native_browser_file_tool'}}

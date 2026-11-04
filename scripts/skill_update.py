@@ -24,7 +24,8 @@ SEMVER = re.compile(r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
 REQUIRED = {'SKILL.md', 'agents/openai.yaml', 'references/skill-update.md', 'references/cli.md',
             'scripts/paperflow.py', 'scripts/paperflow.js', 'scripts/paperflow_base.py',
             'scripts/paperflow_upload.py', 'scripts/paperflow_workflow.js',
-            'scripts/api_contracts.json', 'scripts/skill_update.py'}
+            'scripts/api_contracts.json', 'scripts/skill_update.py',
+            'scripts/paperflow_session.py', 'scripts/paperflow_session.mjs'}
 MAX_DOWNLOAD = 12 * 1024 * 1024
 
 

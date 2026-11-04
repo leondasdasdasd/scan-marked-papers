@@ -6,7 +6,7 @@ B 表示 `/api/batches/{bid}`，L 表示 `B/lesson-practice`。正常流程用 [
 
 路径中的bid默认取本次批次，其余params均来自真实读取。查询字段放plan.query，JSON字段放plan.body；下表“必填”是CLI登记的最低字段，不能据此删掉服务端当前对象的其他必要内容。所有写计划须有本次真实 `evidence_confirmed:true`、非空evidence_note和适用的expected版本；GET不要求证据标记。标记本身不证明审图。review_token、任务控制token、范围预检token和检查token仅运行时内存使用，不放计划、日志、checkpoint或交付。special=upload/catalog/sync走对应专用命令，普通api-call不绕过。
 
-artifact项是文件/图片入口，按真实工具取必要图证或下载；不把文件当JSON、不把取得URL当实际看过图。普通请求保持当前授权同源会话，不导出Cookie、令牌或storage state。以下逐项列明功能、字段和前置条件；完整版本和恢复约束在后文。
+artifact项是文件/图片入口，按真实工具取必要图证或下载；不把文件当JSON、不把取得URL当实际看过图。普通请求保持当前授权同源会话，不导出Cookie、令牌或storage state；独立会话接入仅走 [CLI](cli.md) 的受控内存迁移，不在API计划、聊天或文件中传凭证。以下逐项列明功能、字段和前置条件；完整版本和恢复约束在后文。
 
 
 ## 身份、课程与名单目录
