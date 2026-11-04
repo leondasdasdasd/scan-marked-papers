@@ -1,6 +1,6 @@
 # 办公智能体接入
 
-老师只需提供PDF或已有批阅台链接，地址、会话和工具参数由智能体获取。v1.8.0将上传、选班和grading纳入接口/CLI主流程。能导入技能或生成脚本不等于已访问授权浏览器、完成实卷验收。
+老师只需提供PDF或已有批阅台链接，地址、会话和工具参数由智能体获取。v1.9.0每天首次使用检查版本，并先确认教师选择，再按终点使用上传、选班和grading的接口/CLI主流程。能导入技能或生成脚本不等于已访问授权浏览器、完成实卷验收。
 
 ## WorkBuddy 导入
 
@@ -8,10 +8,16 @@
 
 先使用产品现有文件/浏览器工具。[Agent Browser 官方说明](https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/WorkBuddy-Zero-Cost-Skill-Top-10/Agent-Browser) 展示打开、滚动、点击与截图，不能单独证明支持本包 CLI 后端的 eval --stdin/--session、可 evaluate JavaScript，或已连接用户 Chrome。只使用当次实际开放并已授权的能力，不擅装 Agent Browser、插件或运行时。
 
+## 每天首次使用检查更新
+
+现有工具可运行Python时，正常处理材料前先用`skill_update.py ensure`：每天首次按本机自然日查询官方main，同日读取持久记录；有更高版本自动校验并仅更新本技能，成功后回读新SKILL.md。网络失败当天不反复查，次日再试；本地修改冲突或旧安装无manifest时保留旧版，不能强覆或说已是最新版。只问版本用离线status，明确立即刷新才force，详见 [更新说明](skill-update.md)。
+
+现有命令/下载/文件工具能实现同样保护时才按同一逻辑执行；只有ZIP导入页面、无Python或不能可靠写回技能时，明确自动更新不可用并提供官方导入入口，不要求老师安装Codex、Python、插件或新运行时。产品能导入本包不等于能自动更新；这不是无人使用也会运行的后台定时任务。
+
 ## 按实际能力执行
 
-1. 先access核实身份、学校、课堂会话和同源，不凭默认地址称生产。新PDF用upload经FormData接口创建，原生文件工具仅在需要时注入文件；已有链接沿用原记录。课程/班级用classes、class-students、scope，不索取或导出Cookie、令牌、storage state。
-2. 已有Python、兼容浏览器CLI后端与真实会话时，scan与grading均用 [CLI](cli.md) 的run --follow；定点缺口先查api-list，再用受限api-call，不默认操作业务页面。
+1. 收到材料先让老师选择扫描已批卷或批改未批卷；批改时可批完停止或继续整理，整理后只检查或同步课堂。扫描包含整理，明确同步已包含必要整理与检查；已明确项不重复问，缺项集中问一次，选定前只读检查。之后access核实身份、学校、课堂会话和同源，不凭默认地址称生产。新PDF用upload经FormData接口创建，原生文件工具仅在需要时注入文件；已有链接沿用原记录。课程/班级用classes、class-students、scope，不索取或导出Cookie、令牌、storage state。
+2. 已有Python、兼容浏览器CLI后端与真实会话时，scan与grading均用 [CLI](cli.md) 的run --follow；只批改加--stop-after grading，整理路径加--stop-after check，定点缺口先查api-list，再用受限api-call，不默认操作业务页面。
 3. 无兼容CLI后端、但产品已有执行命令和浏览器evaluate时，用`--emit-script <PATH>`生成engine_file与小步骤script_file。首次或导航后先evaluate引擎取得engine_loaded，再执行小步骤；同页面后续只读/执行小步骤并collect，复用checkpoint，不反复展开完整引擎。engine_not_loaded时按evaluate_bootstrap_file补加载，尚未发业务请求；--standalone-script仅保留旧兼容形式。生成本身不执行，emit仅单轮预算、不绕过登录；不手写fetch/XHR、猜路由或翻压缩源码。
 4. evaluate只是同源接口执行宿主，不要求逐步导航、点击或截图。正常登录、确需文件注入和必要图证以外，只有接口不支持/不兼容或工具缺能力的具体证据，才定点使用页面。确实缺能力时一次说明可完成步骤、已核实的接入方法或阻塞与恢复点；不反复索要会话名/CLI参数，不要求安装Codex、Docker或云主机wrapper。
 
@@ -23,4 +29,4 @@
 
 CLI覆盖scan、供应商快速批改和答案卷智能批改；83项受限接口的功能、字段和门槛见 [API参考](api.md)。内置工具不替代选参考卷、实际审图、目录校对或用户必要业务判断。已授权检查流程中的框/目录确认、学生关联和既定媒体准备直接推进，不为步骤增加授权询问。
 
-默认终点仍是全批真实同步检查：独立计算题、全批统计和标准题来源严审保留，个人图按异常修，姓名不清暂留未关联。覆盖不足不得称 ready 或改 subset 求通过；检查模式不调用 imports 或提交型恢复。仅本次明确要求实际同步才进入提交。
+按老师选择交付：只批改核对全批原始done与基础结果计数后停止，不自动整理或同步检查；选择整理时再做全批真实同步前检查。独立计算题、全批统计和标准题来源严审保留，个人图按异常修，姓名不清暂留未关联。覆盖不足不得称 ready 或改 subset 求通过；检查模式不调用 imports 或提交型恢复。仅本次明确要求实际同步才进入提交。

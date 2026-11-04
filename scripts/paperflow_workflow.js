@@ -136,6 +136,31 @@
     await api('POST',B+'/start');transitions.push({action:'grading_started'});
     return {outcome:'waiting',waiting_for:'grading',submitted:false};
   }
+  function gradingSummary(batch){
+    const papers=batch.students||[],counts={},missingResults=[],pending=[];
+    let observations=0,resultPapers=0;
+    for(const paper of papers){
+      if(paper.status!=='done')pending.push(paper.id);
+      const rows=paper.judgments?.length?paper.judgments:paper.results;
+      const available=Array.isArray(rows)&&rows.length>0;
+      if(available){
+        resultPapers++;
+        for(const row of rows){
+          const verdict=typeof row.verdict==='string'&&row.verdict?row.verdict:'unknown';
+          counts[verdict]=(counts[verdict]||0)+1;observations++;
+        }
+      }else if(Array.isArray(paper.provider_results)&&paper.provider_results.length)resultPapers++;
+      else missingResults.push(paper.id);
+    }
+    const ids=new Set(papers.map(p=>p.id));
+    const complete=papers.length>0&&ids.size===papers.length&&pending.length===0&&missingResults.length===0;
+    return {outcome:complete?'grading_completed':'grading_incomplete',workflow_mode:batch.workflow_mode,
+      grading_engine:batch.grading_engine,papers:papers.length,graded_papers:papers.filter(p=>p.status==='done').length,
+      result_papers:resultPapers,missing_result_papers:missingResults,pending_papers:pending,
+      duplicate_papers:papers.length-ids.size,observations,verdicts:counts,grading_complete:complete,
+      stopped_at:'grading',stop_after:'grading',organization_started:false,submitted:false,
+      full_accuracy_verified:false,link:input.origin+'/exams/'+input.batch};
+  }
   async function upload(p){
     if(!p||typeof p.key!=='string'||!/^[A-Za-z0-9_-]{8,100}$/.test(p.key)||!/^[a-f0-9]{64}$/.test(p.sha256))fail('invalid_upload_plan');
     if(p.scope)evidence(p.scope);
@@ -207,5 +232,5 @@
       accepted_warning_ids:p.accepted_warning_ids,allow_pending_formula_protocol:false});
     return {outcome:a.state==='SUCCEEDED'?'synchronized':'synchronization_accepted',attempt:redact(a),submitted:true};
   }
-  return {classes,classStudents,call,grade,live,sync,upload,organizer,redact};
+  return {classes,classStudents,call,grade,gradingSummary,live,sync,upload,organizer,redact};
 }

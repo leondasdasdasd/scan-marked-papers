@@ -2,6 +2,8 @@ async (input) => {
   const legacy = __LEGACY__;
   const workflowFactory = __WORKFLOW__;
   let uploadReceipt=input.checkpoint?.upload_receipt||null;
+  const stopAfter=input.stop_after??input.checkpoint?.stop_after??'check';
+  const targetReceipt=input.action==='run'||input.checkpoint?.stop_after!==undefined?{stop_after:stopAfter}:{};
   const B='/api/batches/'+input.batch;
   const calls=[], transitions=[];
   let receipt=input.checkpoint?.frame_receipt||null;
@@ -435,12 +437,15 @@ async (input) => {
   const workflow=workflowFactory({input,api,fail,full,selectScope,inspectOrCheck,control,transitions,
     getUpload:()=>uploadReceipt,setUpload:r=>uploadReceipt=r});
   async function run(){
+    if(!['grading','check'].includes(stopAfter))fail('invalid_stop_after');
     const readonly=await control({resume:input.plan?.resume_authorized===true});if(readonly)return readonly;
     const batch=await api('GET',B);
     if(!['scan','grading'].includes(batch.workflow_mode))return {outcome:'unsupported_workflow',submitted:false};
+    if(stopAfter==='grading'&&batch.workflow_mode!=='grading')fail('grading_endpoint_requires_grading');
     await selectScope(input.plan?.scope);
     if(batch.workflow_mode==='grading'){
-      const pending=await workflow.grade(batch);if(pending)return pending;
+      const pending=await workflow.grade(batch);if(pending)return {...pending,stop_after:stopAfter};
+      if(stopAfter==='grading')return workflow.gradingSummary(batch);
     }
     let a=await full();
     if(batch.workflow_mode==='grading'&&!workflow.organizer(batch)&&(!a.status||a.status==='not_generated')){
@@ -577,7 +582,7 @@ async (input) => {
     else if(input.action==='check'){
       const stop=await control();result=stop||await inspectOrCheck(input.action);
     }else result=await inspectOrCheck(input.action);
-    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:uploadReceipt?.batch_id||input.batch,upload_receipt:uploadReceipt,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};
+    return {ok:true,result,transitions,calls,checkpoint:{origin:input.origin,batch_id:uploadReceipt?.batch_id||input.batch,...targetReceipt,upload_receipt:uploadReceipt,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};
   }catch(error){return {ok:false,error:{code:error.code||'transport_failed',...(error.details||{})},transitions,calls,
-    checkpoint:{origin:input.origin,batch_id:uploadReceipt?.batch_id||input.batch,upload_receipt:uploadReceipt,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};}
+    checkpoint:{origin:input.origin,batch_id:uploadReceipt?.batch_id||input.batch,...targetReceipt,upload_receipt:uploadReceipt,frame_receipt:receipt,association_receipt:associations,catalog_receipt:catalogReceipt,auth_receipt:authReceipt}};}
 }

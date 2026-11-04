@@ -76,6 +76,39 @@ test('quick reference ranking reuses existing reliable verdicts',async()=>{
  w.batch.students[0].results=[{verdict:'correct'},{verdict:'incorrect'}];w.batch.students[1].results=[{verdict:'correct'},{verdict:'correct'}];
  const d=await main(input('run'));assert(d.ok);assert.equal(d.result.reference_ranking,'existing_grading_verdicts');assert.equal(d.result.candidates[0].id,'p2');assert.equal(d.result.candidates[0].correct_rate,1);assert.equal(w.starts,0);
 });
+for(const engine of ['xueersi','doubao','llm'])test(engine+' grading-only starts and resumes to grading without organizing',async()=>{
+ const w=gradingWorld(engine);let reads=[];const old=global.fetch;
+ global.fetch=async(path,o)=>{reads.push([o.method,path]);return old(path,o);};
+ let d=await main(input('run',{stop_after:'grading'}));assert(d.ok);assert.equal(d.result.outcome,'waiting');assert.equal(d.checkpoint.stop_after,'grading');
+ w.progress.status='completed';w.tasks.grading={status:'finished'};
+ w.batch.students.forEach((s,i)=>{s.status='done';s.results=[{verdict:i?'incorrect':'correct'}];});
+ d=await main(input('run',{checkpoint:d.checkpoint}));assert(d.ok);assert.equal(d.result.outcome,'grading_completed');
+ assert.equal(d.result.graded_papers,2);assert.equal(d.result.observations,2);assert.deepEqual(d.result.verdicts,{correct:1,incorrect:1});
+ assert.equal(d.result.submitted,false);assert.equal(w.gradingStarts,1);assert.equal(d.checkpoint.stop_after,'grading');
+ assert(!reads.some(([method,path])=>path.includes('/analysis')||method!=='GET'&&path.includes('/lesson-practice')));
+});
+test('grading-only reports missing result evidence without retrying done papers',async()=>{
+ const w=gradingWorld();w.batch.students.forEach(s=>s.status='done');w.progress.status='completed';
+ const d=await main(input('run',{stop_after:'grading'}));assert(d.ok);assert.equal(d.result.outcome,'grading_incomplete');
+ assert.deepEqual(d.result.missing_result_papers,['p1','p2']);assert.equal(d.result.grading_complete,false);assert.equal(w.gradingStarts,0);assert.equal(w.starts,0);assert.equal(w.checks,0);
+});
+test('grading-only preserves uncertain judgments rather than declaring them correct',async()=>{
+ const w=gradingWorld('llm');w.batch.students.forEach(s=>{s.status='done';s.judgments=[{verdict:'uncertain'},{}];});w.progress.status='completed';
+ const d=await main(input('run',{stop_after:'grading'}));assert(d.ok);assert.equal(d.result.outcome,'grading_completed');
+ assert.deepEqual(d.result.verdicts,{uncertain:2,unknown:2});assert.equal(d.result.full_accuracy_verified,false);assert.equal(w.checks,0);
+});
+test('scan cannot use the grading endpoint or write a scope under a conflicting goal',async()=>{
+ const w=world();const d=await main(input('run',{stop_after:'grading',plan:{scope:{...ev,revision:1,semester_id:'1',class_ids:['3'],scope:{source:'teaching'}}}}));
+ assert.equal(d.error.code,'grading_endpoint_requires_grading');assert(w.trace.every(([method])=>method==='GET'));assert.equal(w.starts,0);
+});
+test('an explicit new check endpoint overrides the prior grading-only goal',async()=>{
+ const w=gradingWorld();w.batch.students.forEach(s=>s.status='done');w.progress.status='completed';w.a.status='not_generated';
+ const d=await main(input('run',{stop_after:'check',checkpoint:{origin:location.origin,batch_id:'test',stop_after:'grading'}}));
+ assert(d.ok);assert.equal(d.result.outcome,'needs_reference');assert.equal(d.checkpoint.stop_after,'check');assert.equal(w.checks,0);
+});
+test('unknown endpoints fail before reading or mutating the batch',async()=>{
+ const w=world();const d=await main(input('run',{stop_after:'sync'}));assert.equal(d.error.code,'invalid_stop_after');assert.equal(w.trace.length,0);
+});
 test('LLM grading uses prepare-analysis without asking for a reference',async()=>{
  const w=gradingWorld('llm');w.batch.students.forEach(s=>s.status='done');w.progress.status='completed';w.a.status='not_generated';let prepares=0;
  hook(w,async(path,o)=>{if(path===B+'/lesson-practice/prepare-analysis'){assert.equal(o.body,undefined);prepares++;w.finish();return w.a;}});

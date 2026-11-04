@@ -2,6 +2,12 @@
 
 核对来源：`backend/app.py` 的 upload、批改启动、学生修改与 analysis 路由；`backend/read_routes.py` 的 live-state/学生读取；`analysis_trigger.py`、`organizer_flow.py` 及前端真实调用。以下是源码契约，尚不代表各环境实际可用。B 为 `/api/batches/{bid}`，L 为 `B/lesson-practice`。正常流程使用 [CLI](cli.md) 的 upload/run；需定点补步骤时查 api-list，用受限 api-call 读取或保存，不默认转去业务页面。
 
+## 先确定教师选择
+
+新材料先明确扫描已批卷还是批改未批卷。扫描包含识别与整理；批改可以选“批完停止”或“继续整理”，整理后再选“只检查”或“同步课堂”。已经明确同一材料的选项直接沿用，缺项集中问一次，不把旧默认、其他材料或最近使用配置当作教师选择。明确要求同步已包含必要整理和检查，不再逐步问依赖。
+
+仅批改用 `run --stop-after grading`：完成全批原始批改，核对done与未完成卷、基础结果计数后交付，禁止接着调用analysis、frame/catalog、media或preflight。整理路径用 `run --stop-after check`；同步仍在检查后走明确授权的专用sync。扫描不接受grading终点。
+
 ## 模式与能力
 
 | 场景 | 上传/现有字段 | 初始能力与答案卷 |
@@ -10,7 +16,7 @@
 | 快速批改 | workflow_mode=grading，grading_engine=xueersi 或 doubao | session 的 xueersi_configured/xueersi_error 或 doubao_configured/doubao_error；不强制 LLM 扫描能力才能启动供应商批改。通常无答案卷；如用户明确第一份为答案卷可 has_answer_paper=true，仅跳过不批 |
 | 智能批改 | workflow_mode=grading，grading_engine=llm | models[所选llm_model].configured 与 workflows.grading；has_answer_paper=true，最前一整份为答案卷，每份页数/版式一致，至少答案卷+一份学生卷；缺答案卷不可伪造或自动改快速模式 |
 
-快速批改不是快速扫描。`scan_fast` 只属扫描；`analysis_fast` 属非 LLM 快速批改**后的整理**设置，不能用它选供应商或恢复任务。已有记录保持 engine/workflow/模式，除非本次明确要求变更且真实契约允许。供应商批改完成后的模型整理仍须核实对应阶段的模型能力与授权，不因供应商可用就跳过。
+快速批改不是快速扫描。`scan_fast` 只属扫描；`analysis_fast` 属非 LLM 快速批改**后的整理**设置，不能用它选供应商或恢复任务。已有记录保持 engine/workflow/模式，除非本次明确要求变更且真实契约允许。选择整理时，供应商批改完成后的模型整理仍须核实对应阶段的模型能力与授权，不因供应商可用就跳过。
 
 新 PDF 用 upload 调用 `POST /api/batches` multipart，沿用 [API参考](api.md) 的幂等头/文件与分卷校验；文件工具仅在需要时注入文件，不点击上传表单。明确传 workflow_mode、grading_engine、pages_per_paper、paper_size、orientation、paper_sides、has_answer_paper，llm_model 用平台允许值；其余按本次有效设置。不能将学生第一份当答案卷吞掉。普通 LLM grading 无答案卷被 422 拒绝，不能靠省略字段绕过。响应学生 start/index 已扣除答案卷，后续计数以真实 students 为准。
 
@@ -18,7 +24,7 @@
 
 从受支持 `/exams/{bid}`、`/exams/{bid}/analysis`、`/exams/{bid}/papers/{sid}` 等路由提取 origin、bid；不将任意参数当 API/命令执行。不带入不可信跳转或授权 token 到新域名。先在该环境获授权会话中读 B，核实身份、学校与记录权限；404/403 不绕过，不因链接无法读就新建副本。已有链接已足以定位记录时不要求用户重新交 PDF。
 
-当次明确“继续做/接着处理”包含恢复原已停止批改/整理至默认检查终点的授权；若仅询问进度、只读查看则不重启。正在 stopping 先等待其完成停止与持久化，再依真实阶段启动缺失范围；不并行抢启。读取 task-control 的真实可用字段与当前状态，控制 token 仅运行时使用、不输出或保存，不臆造 available/resume 字段。
+当次明确“继续做/接着处理”包含恢复同一材料已确认路径的授权；终点尚未明确则先补选，不自动展开整理或同步；若仅询问进度、只读查看则不重启。正在 stopping 先等待其完成停止与持久化，再依真实阶段启动缺失范围；不并行抢启。读取 task-control 的真实可用字段与当前状态，控制 token 仅运行时使用、不输出或保存，不臆造 available/resume 字段。
 
 优先 `GET B/live-state`：返回 progress、task_control.grading/analysis、analysis_version、analysis_status。旧环境缺此接口可读 B/progress、B/task-control、B/analysis/version、B/analysis/status，并按需 B/analysis?view=summary。学生详情按 B/students/{sid}、供应商明细按其 `/provider-results`；大对象只按变化与问题读取。同步再读 lesson-practice/progress、imports/config，避免已提交记录重做。
 
@@ -29,10 +35,10 @@
 | 答案卷已读取、paused 或待核 | 检查真实 questions/semantic_questions、答案与定位；没有通用 answers/confirm 接口，核对后用 start 继续。需修改先查已登记接口的实际字段与用途；确无支持才按具体缺口回退或报告，不臆造确认 API |
 | grading/queued 或分析 generating | 按现有任务进度轮询；409 正在处理是观察原任务的信号，不是换 batch 或强制重跑理由 |
 | 部分批改 failed/pending、已有 done | 核对失败原因与人工修改，按学生重试缺失范围；done 与人工结果保留，不对完成卷默认重新批改 |
-| 已批改、未整理 | 快速供应商走统一整理 B/analysis 并选参考卷；LLM 走 lesson-practice/prepare-analysis；见下文 |
+| 已批改、未整理 | 只批改路径立即核验并交付；仅已选整理时，快速供应商走统一整理 B/analysis 并选参考卷，LLM走lesson-practice/prepare-analysis |
 | awaiting_frames / awaiting_confirmation | 复用当前 frame/catalog revisions，只补核对、必要拆题及确认范围；不重新批改 |
 | 已整理 completed/partial、待同步检查 | 核对 stale、覆盖/失败项、名单和媒体，处理必要问题后 preflight；partial 不自动当全员已覆盖 |
-| 最新 check ready 且输入无变化 | 默认直接交付已有批阅台链接与最新统计/边界，不为“接着做”自动重新生成；本次明确同步才继续提交 |
+| 最新 check ready 且输入无变化 | 检查终点直接交付已有链接与统计/边界；已明确同步终点才继续提交，不为“接着做”自动重新生成 |
 | 已有导入非终态/暂停 | 默认检查模式只读回报，不调用提交型 resume；明确同步模式才按原 attempt 恢复 |
 | 已同步 SUCCEEDED | 只读回报已有真实链接与 local_changed；不覆盖、不重新提交 |
 | 状态未知/中断 | 由 run 读取 live-state/task-control、原错误/recovery_action；核实无活跃 job 后仅走已登记且适用于当前阶段的恢复接口，不臆造通用 resume/force API |
@@ -50,6 +56,8 @@
 
 ## 批改完成后的整理
 
+本节仅适用于老师已选择整理或同步的路径；选择批完停止时不进入本节。
+
 先确认本次授权范围的学生批改 done 且实际有该模式可用的 results/judgments/供应商结果（读取按需，不机械要求所有模式同一种数组非空）；批次 completed 一个字符串不足以证明完成。不通过自动排除未完成/未关联卷绕过 require_finished。检查真实 batch 与分析 snapshot 的 paper 覆盖，统计应覆盖本次授权全批，不能仅以 preflight ready 证明全员纳入。
 
 - **scan 与 xueersi/doubao**：当前 `organizer_flow.enabled` 为 true。快速批改先完成**全批**批改，再按主文高正确率规则选本批 reference_student_id，`POST B/analysis` body `{reference_student_id}`。已有 draft 沿用原参考卷；后续 frame/catalog 及新版范围确认按 api.md。学生整理应利用供应商批改来源和人工结果，不重新推翻原批改。
@@ -59,4 +67,4 @@
 - `PATCH B/analysis/mode` body `{analysis_fast:boolean}` 仅非 LLM 快速批改可用；改变会清题框缓存/准备进度、将分析变为 not_generated 并保留旧快照。不是恢复按钮，不为更快或接手任务擅切，不与 scan_fast 混用。
 - reference_preparation、recovery_action、retryable、user_stopped、recovery_wait 等按真实响应处理；有自动恢复安排时观察原任务，明确停止的任务，只有本次“继续做”等恢复要求才按真实继续入口恢复；只读请求保持停止。源码有 `POST B/analysis` 的 `{resume_reference_answers:true}` 分支用于已完成整理后的参考答案补齐，但只在该阶段、该平台实际提供且需此恢复时使用，不作为全部中断任务的万能恢复。
 
-完成整理后沿用主文渐进首轮：程序全批统计一致性、必要参考图/粒度与风险抽查、必要实质修复、真实完整同步 preflight；默认 ready 即交付并停，不自启全量深审，不调用导入提交。
+完成整理后沿用主文渐进首轮：程序全批统计一致性、必要参考图/粒度与风险抽查、必要实质修复、真实完整同步 preflight；检查终点ready即交付并停，不自启全量深审；同步终点再走专用sync，不把检查通过当作已经同步。

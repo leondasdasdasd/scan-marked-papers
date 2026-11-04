@@ -55,6 +55,30 @@ console.log(JSON.stringify({step_bytes:Buffer.byteLength(step),requests}));})();
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertLess(json.loads(result.stdout)['step_bytes'],3000)
 
+    def test_run_endpoint_survives_emit_recovery_and_can_be_explicitly_updated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);cp=root/'checkpoint.json';step=root/'step.js'
+            args=['--base-url','https://example.test','--batch-id','abc','--checkpoint',str(cp),'--standalone-script','--emit-script',str(step),'run']
+            code,_=self.run_cli([*args,'--stop-after','grading'])
+            self.assertEqual(code,0)
+            self.assertEqual(json.loads(cp.read_text())['stop_after'],'grading')
+            code,_=self.run_cli(args)
+            self.assertEqual(code,0)
+            self.assertTrue(step.read_text().endswith('"stop_after": "grading"})'))
+            code,_=self.run_cli([*args,'--stop-after','check'])
+            self.assertEqual(code,0)
+            self.assertEqual(json.loads(cp.read_text())['stop_after'],'check')
+
+    def test_run_endpoint_is_saved_before_uncertain_browser_transport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cp=Path(directory)/'checkpoint.json'
+            args=['--base-url','https://example.test','--batch-id','abc','--browser-session','test','--checkpoint',str(cp),'run','--stop-after','grading']
+            with patch.object(paperflow.base,'browser',side_effect=OSError('lost connection')):
+                code,data=self.run_cli(args)
+            self.assertEqual(code,1)
+            self.assertEqual(data['error']['code'],'transport_uncertain')
+            self.assertEqual(json.loads(cp.read_text())['stop_after'],'grading')
+
     def test_conflicting_link_or_nonbusiness_path_rejects_before_browser(self):
         samples = [
             ['--batch-url', 'https://example.test/exams/abc/analysis', '--batch-id', 'other'],

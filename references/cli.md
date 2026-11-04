@@ -1,6 +1,18 @@
 # 批量 CLI 编排
 
-本说明对应主入口 `scripts/paperflow.py` 与 `paperflow.js`；`paperflow_base.py`仅为旧兼容入口。三种业务流程——已批扫描、供应商快速批改、答案卷智能批改——均先用专用CLI/run，再用受限api-call补定点步骤；没有专用编排不等于必须操作页面。只有接口不支持/不兼容或工具缺能力的具体证据，才定点回退页面。默认终点为真实全批同步检查，不提交导入；已有导入与停止标记优先只读。办公接入边界见 [office-agents.md](office-agents.md)。
+本说明对应主入口 `scripts/paperflow.py` 与 `paperflow.js`；`paperflow_base.py`仅为旧兼容入口。三种业务流程——已批扫描、供应商快速批改、答案卷智能批改——均先用专用CLI/run，再用受限api-call补定点步骤；没有专用编排不等于必须操作页面。只有接口不支持/不兼容或工具缺能力的具体证据，才定点回退页面。先按SKILL.md让老师选定处理模式、批改后是否整理及是否同步。只批改用run --stop-after grading，整理路径用run --stop-after check；同步在检查后另走明确授权的sync。已有导入与停止标记优先只读。办公接入边界见 [office-agents.md](office-agents.md)。
+
+## 每天首次使用与版本重载
+
+先执行`python3 <本技能目录>/scripts/skill_update.py ensure`，按本机自然日每天首次检查GitHub；同日已有记录只读缓存，不重复联网。官方版本更高会自动校验、备份并更新本技能，之后重新读实际SKILL.md；正常安装目录中的CLI业务入口也会兜底ensure，成功更新后重载代码。固定来源、manifest校验、本地修改保护及失败回滚见 [更新说明](skill-update.md)。
+
+只问版本用`skill_update.py status`，离线返回本地版本与最近记录；必要的只读远端核对不调用ensure。用户明确手动刷新才`ensure --force`，仍不强覆本地改动。网络失败记录当日失败，次日再试；不能把失败缓存当最新。开发Git checkout、离线help/api-list/collect及带metadata的离线review不触发自动更新。用户明确关闭时由智能体设置PAPERFLOW_AUTO_UPDATE=0（false/off同样有效），CLI与ensure --force均遵从；用户未要求恢复前不重新启用。没有命令/Python/可靠安装工具就报告能力缺口，不声称已自动更新；无人使用时不会后台检查。
+
+## 教师选择与阶段终点
+
+老师选择只批改时，`run --stop-after grading`仅推进原始批改，核对全批done、缺失/失败状态与基础结果计数；grading_completed要求本批非空、卷ID无重复、全批done，且每份有results、judgments或provider_results结果证据；done但缺结果仍是grading_incomplete，不自动重批done。基础verdict计数保留uncertain/unknown，不视为全部判断准确；organization_started=false只说明本次命令没有启动整理，不能据此声称服务端以前没有整理。该终点不读取analysis、不生成题框/目录、不准备媒体或preflight。整理路径用`run --stop-after check`；扫描本身包含整理，不能指定grading终点。同步选择先完成check，再按专用sync提交，不让run直接提交课堂。
+
+stop_after在派发前写入本次checkpoint，后续省略--stop-after时沿用；老师明确变更终点时显式传新--stop-after覆盖原目标；旧checkpoint没有该字段时CLI兼容默认check，这只是工具兼容行为，不能替代老师选择，智能体须先补清缺少的业务终点。老师已在当前会话为同一材料明确选择时不再问；跨材料不能照搬。选项未明确时只做只读检查，不以CLI默认值启动写任务。
 
 ## 入口与输出
 
@@ -51,7 +63,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 
 默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
 
-`ok`/退出码只说明工具执行，业务完成看outcome、completion、remaining、顶层ready/submitted与真实全批覆盖，不只取原始preflight.ready。upload经FormData创建，scan/grading均由run按真实阶段推进；原生文件工具只向接口环境注入PDF，不默认点击上传表单。旧兼容入口的能力以自身help为准，不据此限制主入口的新命令。
+`ok`/退出码只说明工具执行，业务完成看outcome、completion、remaining、顶层ready/submitted与真实全批覆盖，不只取原始preflight.ready。upload经FormData创建，scan/grading均由run按已选终点推进；只批改看grading_completed/grading_incomplete与原始全批覆盖，不要求ready；原生文件工具只向接口环境注入PDF，不默认点击上传表单。旧兼容入口的能力以自身help为准，不据此限制主入口的新命令。
 
 | 命令 | 用途与边界 |
 | --- | --- |
@@ -65,7 +77,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 | `api-list [--operation <名称>]` | 离线列出受限registry的功能、路径、查询及必要字段，不访问业务服务 |
 | `api-call --operation <名称> [--plan <JSON>]` | 按已登记操作定点读写；GET不要求证据，写入要求真实证据/当前版本；禁止任意URL，special操作走专用命令 |
 | `sync --plan <JSON> --authorize-sync` | 仅用户本次已明确同步时提交或恢复原导入；开关不增加用户授权，默认检查命令绝不提交 |
-| `run [--plan <JSON>] [--review-pdf <PDF> --review-out <DIR>] [--follow --max-seconds 600]` | 按真实阶段推进；waiting 可有界等待，审图、目录校对、失败或终点返回。成对 review 参数复用当前读取生成校对包 |
+| `run [--stop-after grading或check] [--plan <JSON>] [--review-pdf <PDF> --review-out <DIR>] [--follow --max-seconds 600]` | 按老师选择的终点和真实阶段推进；waiting 可有界等待，审图、目录校对、失败或终点返回。成对 review 参数复用当前读取生成校对包 |
 | `snapshot [--output <裸snapshot JSON>]` | 读批次/catalog，给源PDF SHA、read_version等版本、完整框与精简目录（正文、稳定选项ID、blank_ids、answers/extras）；reviewed=false不证明看过图 |
 | `review [--metadata <JSON>] --pdf <原PDF> --out <受控目录>` | 带 metadata 则复用已保存元数据离线渲染，不访问浏览器、不需会话；省略则从浏览器取 snapshot。核验 batch_id 和 PDF SHA，生成全参考页、接触表与 review.json，需 pymupdf/Pillow；仍 reviewed=false |
 | `frames --edits <JSON> [--confirm]` | 本地整包校验 set/shift/split/promote_children，最多一次 PATCH，再按需确认；预切正常、题框非空且实际已审无修改时可 operations=[]，零 PATCH；失败/空框不能批准。保存与确认不是跨请求事务 |
@@ -206,6 +218,8 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 确切课堂失效诊断的 next_action 为 `check_access_then_relogin`。`relogin` 使用既有 `POST /api/login?force=true&return_to=<本批次路径>`，login_url 仅在浏览器内存保留并延迟导航，不进入输出、checkpoint 或日志；emit 生成不导航，evaluate 执行后才导航。`authentication_navigation_started` 仅表示导航启动；`authentication_navigation_deferred` 表示页面有弹窗或焦点编辑，先保留用户未保存草稿；`authentication_recovery_pending` 表示已启动恢复，不再重复登录。回到原 origin 后用 access 验证同一教师、学校及有效课堂会话，再只读当前业务状态后续做；不自动重放写请求。一次恢复仍无效就保留原 batch 与阻塞，不翻源码、猜刷新入口或循环重登，也不据此断言配置故障。
 
 ## 恢复与终点
+
+先核对本次选择的stop_after；只批改终点不因批改完成自动扩展到analysis/check。恢复沿用同一材料已确认的终点，用户明确变更才更新；未知业务终点先补问，不能把旧checkpoint兼容默认check当成本次授权。
 
 checkpoint 仅作恢复定位与有限回执，保存 origin/batch_id、题框版本/源/参考/签名/粒度目标和关联目标/版本，权限 0600。它不是服务端幂等、跨步骤事务或 exactly-once。Python/JS 拒绝不同 origin/batch；题框恢复还核对当前源 PDF、参考卷、revision、frames_signature，同 operation_id 的编辑内容变更不能复用旧回执。关联回执仅在目标列表和当前 roster 版本匹配时复用，并回读逐项实际目标。
 

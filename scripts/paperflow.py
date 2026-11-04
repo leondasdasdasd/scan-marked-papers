@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 import paperflow_base as base
 import paperflow_upload as upload
+import skill_update
 
 ROOT=Path(__file__).resolve().parent
 
@@ -36,6 +37,13 @@ def request_payload(args,action,plan=None,checkpoint=None):
         raise ValueError('checkpoint_origin_or_batch_mismatch')
     payload={'action':action,'origin':args.base_url,'batch':args.batch_id,'timeout':args.timeout,
              'interval':args.interval,'checkpoint':checkpoint,'plan':plan,'confirm':getattr(args,'confirm',False),'authorize_sync':getattr(args,'authorize_sync',False)}
+    if action=='run':
+        stop_after=getattr(args,'stop_after',None) or checkpoint.get('stop_after','check')
+        if stop_after not in ('grading','check'):raise ValueError('invalid_stop_after')
+        payload['stop_after']=stop_after
+        checkpoint={**checkpoint,'origin':args.base_url,'batch_id':args.batch_id,'stop_after':stop_after}
+        payload['checkpoint']=checkpoint
+        if args.checkpoint:atomic_json(args.checkpoint,checkpoint)
     if action=='upload':
         signature=json.dumps([plan['key'],plan['sha256'],plan['fields'],plan.get('scope')],ensure_ascii=False,separators=(',',':'))
         prior=checkpoint.get('upload_receipt')
@@ -170,6 +178,7 @@ def main():
     p.add_argument('--full-scan',action='store_true');p.add_argument('--analysis-fast',action='store_true')
     p.add_argument('--scope-plan',type=Path);p.add_argument('--file-input-selector',default='#paperflow-upload')
     p=sub.add_parser('run');p.add_argument('--plan',type=Path)
+    p.add_argument('--stop-after',choices=('grading','check'))
     p.add_argument('--review-pdf',type=Path);p.add_argument('--review-out',type=Path)
     p.add_argument('--follow',action='store_true');p.add_argument('--max-seconds',type=int,default=600)
     p=sub.add_parser('snapshot');p.add_argument('--output',type=Path,dest='snapshot_output')
@@ -212,6 +221,15 @@ def main():
     if not 1<=args.timeout<=180 or not 2<=args.interval<=30:parser.error('invalid timeout/interval')
     if args.action=='run' and bool(args.review_pdf)!=bool(args.review_out):parser.error('review-pdf and review-out must be provided together')
     if args.action=='run' and not 1<=args.max_seconds<=3600:parser.error('max-seconds 1..3600')
+    if __name__=='__main__' and args.action not in ('api-list','collect') and not (args.action=='review' and args.metadata):
+        try:updated=skill_update.ensure(ROOT.parent)
+        except Exception:updated={'outcome':'update_failed','error':'update_check_unavailable','updated':False}
+        if updated.get('updated'):
+            os.execv(sys.executable,[sys.executable,str(ROOT/'paperflow.py'),*sys.argv[1:]])
+        if updated.get('outcome')=='update_in_progress':
+            print(json.dumps({'ok':False,'error':{'code':'skill_update_in_progress','retry_after_seconds':2}}));return 1
+        if updated.get('outcome') in ('update_failed','local_changes_preserved','baseline_missing'):
+            print(json.dumps({'skill_update':updated},ensure_ascii=False),file=sys.stderr)
     try:
         plan_path=getattr(args,'plan',None) or getattr(args,'edits',None)
         plan=json.loads(plan_path.read_text()) if plan_path else None

@@ -1,6 +1,6 @@
 # 全流程接口功能与契约
 
-v1.8.0对照实际 `backend/app.py`、`read_routes.py`、`roster_routes.py`、`analysis_trigger.py`、`batch_merge_routes.py`、`lesson_practice_routes.py` 及前端真实调用，核对 `scripts/api_contracts.json` 的83项受限操作。源码/registry不是线上可用性保证；执行以当前部署真实响应为准，不为适配去猜字段或改业务模式。
+本接口契约对照实际 `backend/app.py`、`read_routes.py`、`roster_routes.py`、`analysis_trigger.py`、`batch_merge_routes.py`、`lesson_practice_routes.py` 及前端真实调用，核对 `scripts/api_contracts.json` 的83项受限操作。源码/registry不是线上可用性保证；执行以当前部署真实响应为准，不为适配去猜字段或改业务模式。
 
 B 表示 `/api/batches/{bid}`，L 表示 `B/lesson-practice`。正常流程用 [CLI](cli.md) 专用命令与run编排；本参考供 `api-list --operation <名称>` 后查具体功能，用 `api-call --operation <名称> --plan <受控JSON>` 补已登记步骤。operation只允许registry路径，不是任意HTTP客户端。页面仅用于登录、确需文件注入、必要图证及有明确不兼容证据的缺口。
 
@@ -225,21 +225,21 @@ scan-retry与scan-retry-failed均无body，仅重试统一整理的指定卷/失
 
 ## 首轮检查交付与增量复核
 
-优先统计准确、再题目准确、最后图片位置。首轮全批程序聚合核验结果覆盖、人数/份数/叶题数、重复遗漏、学生关联、各 verdict 与 uncertain 数量；严格核对实际标准题来源的题干算式/上下文/批改归属：统一 organizer 对照代表卷参考图，LLM legacy 对照现有标准题来源/答案卷，不强造参考卷参数。学生个人图以证据风险抽查为主，实际影响判定或统计的截断/串题须修；无影响的留白和轻微边界偏移不默认修复。
+本节仅适用于老师已选择整理或同步的路径；只批改路径核对全批原始done和基础结果计数后停止，不进入目录、题框或preflight。整理优先统计准确、再题目准确、最后图片位置。首轮全批程序聚合核验结果覆盖、人数/份数/叶题数、重复遗漏、学生关联、各 verdict 与 uncertain 数量；严格核对实际标准题来源的题干算式/上下文/批改归属：统一 organizer 对照代表卷参考图，LLM legacy 对照现有标准题来源/答案卷，不强造参考卷参数。学生个人图以证据风险抽查为主，实际影响判定或统计的截断/串题须修；无影响的留白和轻微边界偏移不默认修复。
 
-必要核验与已知实质错误处理后跑真实完整 preflight；有新实质修复则重新检查，默认检查模式最新 ready=true 后立即交付首轮批阅台链接并停止；显式同步模式继续已授权同步并交付真实链接，两种模式都不继续自动逐人逐题看图、全量重识别或微调 region。给出统计、未定、warnings、已做/未做的验证，区分统计完整一致与判定全量准确，并可选询问是否继续全量准确性检查与修复；首轮不等待该选择才交付。
+必要核验与已知实质错误处理后跑真实完整 preflight；有新实质修复则重新检查，检查终点最新ready=true后立即交付首轮批阅台链接并停止；已选同步终点继续已授权同步并交付真实链接，两种模式都不继续自动逐人逐题看图、全量重识别或微调 region。给出统计、未定、warnings、已做/未做的验证，区分统计完整一致与判定全量准确，并可选询问是否继续全量准确性检查与修复；首轮不等待该选择才交付。
 
 后续仅按用户选择的范围深审统计/题目，个人图精修末优先。先读 progress/status/version，只有变化和具体问题才拉对应学生/题目；同一 batch 只更新受影响范围，重新准备所需媒体与检查。无新变化不重复验证，避免完整 payload 循环读取与无依据全量重跑。不承诺固定处理时长，只报告真实阶段进度。
 
 ## 同步准备、检查与提交
 
-默认执行至最新同步检查 `ready=true` 并返回批阅台链接；普通“上传/传一下/处理一下”不授权提交，也不需再次询问终点。只有本次明确要求同步课堂、导入错题本或同步好才进入下述提交步骤；历史上传约定不能覆盖此默认。
+先落实SKILL.md中的教师选择：扫描本身包含整理，批改可选批完停止或继续整理，整理后可选只检查或同步课堂。普通“上传/传一下/处理一下”缺少业务终点时先补齐选择，不能自动展开整理；已明确项不重复问。只批改不进入本节；检查终点执行至最新全批检查并交付，明确同步终点才进入下述提交步骤。历史上传约定、其他材料和CLI兼容默认值不替代本次教师选择。
 
 配置与检查、提交分开：`progress/start` 和 `preflight` **不**等同于平台导入；检查模式可用它们完成检查，但禁止 imports 的 POST 和可能继续提交的 resume。
 
 1. sync-config返回`{config,source_version,questions,selection_context,...}`，先取`cfg=response.config`，revision在cfg内，不在顶层。只提取必要配置、版本与聚合计数，不原样打印题目/答案。sync-options按grade_id/subject_id/batch_id读取允许目录，sync-courses按真实grade_id/subject_id读课程；未选ID按目录接口逐级读取，不默认点页面或硬编码。
 2. `PUT L/config` 的严格 body：`revision`、`grade_id`、`subject_id`、`semester_id`、`course_id`（可空串）、`type_mapping`、`class_mapping`、`selected_paper_ids`（可 null，具体默认范围由服务端核验）。ID 为真实正整数字符串；字段不接收随意 extras。type_mapping 键是标准卷真实 question id，class_mapping 键是本批 paper id，值来自允许目录。PUT 的成功响应直接是配置对象 cfg，采用 `cfg.revision`；它与 GET 的包裹结构不同。不能漏传已有映射而清空它。同步范围应覆盖本次已授权卷，不能为检查通过静默排除失败项。
-3. 可 `POST L/progress/start` body `{revision}` 启动异步准备，然后 `GET L/progress`；返回 preparation、attempt、reusable、current。preparation 的 running/preparing/paused/blocked/awaiting_confirmation 是准备状态，不是同步成功。媒体单独需要时用 `POST L/prepare-media`、`GET L/media-preparation`；不要绕过媒体检查。 返回 `MEDIA_STORAGE_NOT_CONFIGURED` 且 `retryable=false`、`recovery_action=configure_storage` 时是环境配置阻塞，不是适合不断重试的临时失败；核实当前真实部署的存储要求和现有配置，不能把“已有配置文件”当成存储已启用或媒体已验证。当前平台已配置、既定流程中的媒体准备和上传也属于本次已授权上传/检查目标的必要步骤，默认检查模式直接执行，不需另有实际同步授权，不因媒体涉及外部存储就一律再问；这不包含新增外部公开范围。正常已授权的同步流程不新增逐步确认；只有修复会改变外部公开范围、超出现有授权或自动审批明确拒绝时，保留当前检查与恢复点，报告具体未接通项和审批拒绝原因，停止被拒绝的操作，不改公开权限、不转用其他公开上传通道规避，也不伪造 ready。
+3. 可 `POST L/progress/start` body `{revision}` 启动异步准备，然后 `GET L/progress`；返回 preparation、attempt、reusable、current。preparation 的 running/preparing/paused/blocked/awaiting_confirmation 是准备状态，不是同步成功。媒体单独需要时用 `POST L/prepare-media`、`GET L/media-preparation`；不要绕过媒体检查。 返回 `MEDIA_STORAGE_NOT_CONFIGURED` 且 `retryable=false`、`recovery_action=configure_storage` 时是环境配置阻塞，不是适合不断重试的临时失败；核实当前真实部署的存储要求和现有配置，不能把“已有配置文件”当成存储已启用或媒体已验证。当前平台已配置、既定流程中的媒体准备和上传也属于本次已授权上传/检查目标的必要步骤，已选整理检查路径直接执行，不需另有实际同步授权，不因媒体涉及外部存储就一律再问；这不包含新增外部公开范围。正常已授权的同步流程不新增逐步确认；只有修复会改变外部公开范围、超出现有授权或自动审批明确拒绝时，保留当前检查与恢复点，报告具体未接通项和审批拒绝原因，停止被拒绝的操作，不改公开权限、不转用其他公开上传通道规避，也不伪造 ready。
 4. `POST L/preflight` body `{revision,allow_pending_formula_protocol:false}`，返回 `ready,status,issues,counts,check_token,source_version` 等。原始 ready 仅针对平台本次选择范围，已关联 subset 的 ready 不能代表全批；使用 CLI 的 completion、remaining 与总数/覆盖/未覆盖数判断全批终点。姓名未关联时也执行实际检查并记录返回结果，报告“已执行检查，未通过/未完成”，同时列出媒体等其他剩余项，不能推断补姓名即可全量 ready。全批覆盖完整、ready=true 且 status=awaiting_confirmation 才说明本次全批检查可提交；pending/failure/blocker 都不是通过。路由会 `remember_check` 保存本次教师、revision、check_token 和 awaiting_confirmation 记录，因此不必为了生成该记录额外重复 progress/start。媒体仅按 CLI 门槛启动，运行中可用 run --follow 等待；准备完成后重新 preflight 取得最新检查。
 5. **仅同步模式**：sync运行时核对授权内警告、当前教师、最新preflight与cfg版本，依赖提交端权威校验；真实部署未返回内部确认字段时不自行补造，有明确接口缺口才定点补核。以下是sync在浏览器内存构造的`POST L/imports`发送契约，不能把token复制为本地计划：
 
