@@ -257,6 +257,35 @@ test('changed content with the same operation ID is rejected',async()=>{
 test('a calculation group cannot silently remain a composite business question',async()=>{
  const w=world();w.badComposite=true;const d=await main(input('run',{plan:{frames:plan(w)}}));assert.equal(d.error.code,'business_split_mismatch');
 });
+test('natural repeated question labels retain distinct leaf IDs and pass with exact multiplicities',async()=>{
+ const w=world();w.a.frames.forEach(f=>f.label='①');w.finish();
+ const d=await main(input('run',{plan:{expected_leaf_labels:['①','①']}}));
+ assert(d.ok&&d.result.ready);assert.equal(d.result.expected_granularity_verified,true);
+ assert.equal(d.result.leaf_questions,2);assert.equal(new Set(w.a.questions.map(q=>q.id)).size,2);
+ assert.equal(w.patches,0);assert.equal(w.starts,0);
+ assert(w.trace.every(([method,path])=>method==='GET'||path===B+'/lesson-practice/preflight'));
+});
+test('repeated labels cannot conceal missing or extra leaf occurrences',async()=>{
+ const w=world();w.a.frames[0].label='①';w.a.frames[1].label='②';w.finish();
+ const d=await main(input('run',{plan:{expected_leaf_labels:['①','①']}}));
+ assert.equal(d.error.code,'business_split_mismatch');assert.equal(d.error.reason,'label_counts_mismatch');
+ assert.deepEqual(d.error.missing_labels,[{label:'①',count:1}]);assert.deepEqual(d.error.unexpected_labels,[{label:'②',count:1}]);
+ assert.equal(d.error.expected_leaf_count,2);assert.equal(d.error.actual_leaf_count,2);
+ assert.equal(d.error.retryable,false);assert.equal(w.checks,0);assert(w.trace.every(([method])=>method==='GET'));
+});
+test('matching labels never permit duplicate business leaf IDs',async()=>{
+ const w=world();w.finish();w.a.questions[1].id=w.a.questions[0].id;
+ const d=await main(input('run',{plan:{expected_leaf_labels:['1','2']}}));
+ assert.equal(d.error.code,'business_split_mismatch');assert.equal(d.error.reason,'duplicate_or_missing_leaf_ids');
+ assert.equal(w.checks,0);assert(w.trace.every(([method])=>method==='GET'));
+});
+test('leaf mismatch diagnostics stay bounded and omit answer content',async()=>{
+ const w=world();w.a.frames=Array.from({length:25},(_,i)=>frame('q'+i,'actual'+i));w.finish();
+ const d=await main(input('run',{plan:{expected_leaf_labels:Array.from({length:25},(_,i)=>'expected'+i)}}));
+ assert.equal(d.error.reason,'label_counts_mismatch');assert.equal(d.error.missing_labels.length,12);
+ assert.equal(d.error.unexpected_labels.length,12);assert.equal(d.error.details_truncated,true);
+ assert(!JSON.stringify(d.error).includes('answers'));assert.equal(w.checks,0);
+});
 for(const state of ['stopping','stopped','paused'])test('explicit '+state+' is read only',async()=>{
  const w=world();w.tasks={analysis:{status:state}};const d=await main(input('run',{plan:{frames:plan(w)}}));
  assert(d.ok&&d.result.outcome==='stopped_readonly');assert(w.trace.every(([m])=>m==='GET'));

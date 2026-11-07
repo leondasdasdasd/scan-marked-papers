@@ -86,6 +86,35 @@ test('quick grading starts once with no body and waits for the original job',asy
  const w=gradingWorld();let d=await main(input('run'));assert(d.ok);assert.equal(d.result.waiting_for,'grading');assert.equal(w.gradingStarts,1);
  d=await main(input('run',{checkpoint:d.checkpoint}));assert(d.ok);assert.equal(d.result.outcome,'waiting');assert.equal(w.gradingStarts,1);
 });
+test('analysis roster conflicts return one readback without a second POST or masking read failures',async()=>{
+ for(const unavailable of [false,true]){
+  const w=world();w.a.status='not_generated';w.batch.scan_reference_student_id='p1';
+  const previous=global.fetch;let starts=0,liveReads=0,rosterReads=0;
+  global.fetch=async(path,o)=>{
+   if(path===B+'/analysis'&&o.method==='POST'){starts++;return reply({detail:'关联结果已更新，请刷新后重试'},409);}
+   if(path===B+'/live-state'){
+    liveReads++;return reply(unavailable?{detail:'temporarily unavailable'}:{progress:{status:'uploaded'},task_control:{},analysis_status:w.a},unavailable?503:200);
+   }
+   if(path===B+'/roster'&&o.method==='GET')rosterReads++;
+   return previous(path,o);
+  };
+  const d=await main(input('run'));assert.equal(d.ok,false);assert.equal(d.error.code,'analysis_roster_changed');
+  assert.equal(starts,1);assert.equal(liveReads,1);assert.equal(rosterReads,2);assert.equal(w.starts,0);
+  assert.equal(d.error.status,409);assert.equal(d.error.path,B+'/analysis');assert.equal(d.error.retryable,false);
+  assert.equal(d.error.recovery_readback.status,unavailable?'incomplete':'available');assert.equal(d.error.recovery_readback.roster_revision,1);
+  assert.equal(d.error.next_action,unavailable?'read_live_state_and_roster_before_resuming':'review_returned_state_before_resuming');
+ }
+});
+test('unrelated analysis conflicts do not cause roster readback',async()=>{
+ const w=world();w.a.status='not_generated';w.batch.scan_reference_student_id='p1';const previous=global.fetch;let liveReads=0;
+ global.fetch=async(path,o)=>{
+  if(path===B+'/analysis'&&o.method==='POST')return reply({detail:'different conflict'},409);
+  if(path===B+'/live-state')liveReads++;
+  return previous(path,o);
+ };
+ const d=await main(input('run'));assert.equal(d.error.code,'version_conflict');assert.equal(liveReads,0);
+ assert.equal(d.error.recovery_readback,undefined);
+});
 test('quick grading reuses frame review and independently split calculations to preflight',async()=>{
  const w=gradingWorld();w.batch.students.forEach(s=>s.status='done');w.progress.status='completed';
  const d=await main(input('run',{plan:{frames:plan(w)}}));assert(d.ok&&d.result.ready);assert.equal(w.gradingStarts,0);assert.equal(w.patches,1);assert.equal(w.a.questions.length,7);assert.equal(d.result.submitted,false);

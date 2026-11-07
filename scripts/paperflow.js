@@ -37,6 +37,7 @@ async (input) => {
       if(response.status===404&&(path===B||path.startsWith(B+'/'))&&message==='考试不存在或已删除')code='batch_not_found';
       if(response.status===422&&method==='POST'&&[B+'/start',B+'/analysis'].includes(path)&&message==='请先选择年级、学科、课程和班级')code='classroom_scope_required';
       if(response.status===409&&method==='POST'&&path===B+'/start'&&message==='关联结果已更新，请刷新后重试')code='grading_roster_changed';
+      if(response.status===409&&method==='POST'&&path===B+'/analysis'&&message==='关联结果已更新，请刷新后重试')code='analysis_roster_changed';
       if(method==='GET'&&path===B+'/analysis/status'&&response.status===503&&
         message==='分析状态正在更新，请稍后重试')code='analysis_status_updating';
       const classroomAuth=response.status===428&&(serverCode==='classroom_login_required'||serverCode==='GATEWAY_AUTHORIZATION'||
@@ -47,7 +48,8 @@ async (input) => {
         permission_denied:'verify_identity_scope',contract_mismatch:'verify_deployed_contract',
         rate_limited:'wait_before_reading_state',api_failed:'read_state_before_retry',
         analysis_status_updating:'wait_before_reading_state',batch_not_found:'verify_existing_batch_link',
-        classroom_scope_required:'select_verified_classroom_scope',grading_roster_changed:'read_live_state_and_roster_before_resuming'};
+        classroom_scope_required:'select_verified_classroom_scope',grading_roster_changed:'read_live_state_and_roster_before_resuming',
+        analysis_roster_changed:'read_live_state_and_roster_before_resuming'};
       fail(code,{status:response.status,method,path,retryable:false,next_action:next[code],
         ...(message?{message:message.slice(0,500)}:{}),
         ...(Array.isArray(detail)?{validation_errors:detail.slice(0,8).map(e=>({location:e.loc,type:e.type,message:String(e.msg||'').slice(0,300)}))}:{}),
@@ -379,9 +381,24 @@ async (input) => {
   function granularity(a,expected,independent=[]){
     const parents=new Set((a.questions||[]).map(q=>q.parent_id).filter(Boolean));
     const leaves=(a.questions||[]).filter(q=>!parents.has(q.id));
-    if(expected&&(!Array.isArray(expected)||expected.length!==leaves.length||
-      new Set(expected).size!==expected.length||expected.some(label=>!leaves.some(q=>q.label===label))))fail('business_split_mismatch');
-    if(independent.some(label=>!leaves.some(q=>q.label===label&&!q.parent_id&&!composite(q,a))))fail('business_split_mismatch');
+    const mismatch=(reason,details={})=>fail('business_split_mismatch',{reason,
+      expected_leaf_count:Array.isArray(expected)?expected.length:null,actual_leaf_count:leaves.length,
+      ...details,next_action:'review_leaf_structure_and_expected_counts',retryable:false});
+    if(expected!==undefined&&expected!==null){
+      if(!Array.isArray(expected)||expected.some(label=>typeof label!=='string'||!label))mismatch('invalid_expected_labels');
+      if(leaves.some(q=>typeof q.id!=='string'||!q.id)||new Set(leaves.map(q=>q.id)).size!==leaves.length)
+        mismatch('duplicate_or_missing_leaf_ids');
+      const counts=labels=>{const result=new Map();for(const label of labels)result.set(label,(result.get(label)||0)+1);return result;};
+      const wanted=counts(expected),actual=counts(leaves.map(q=>q.label));
+      const differences=(left,right)=>[...left].filter(([label,count])=>count>(right.get(label)||0))
+        .map(([label,count])=>({label:String(label).slice(0,100),count:count-(right.get(label)||0)}));
+      const missing=differences(wanted,actual),unexpected=differences(actual,wanted);
+      if(missing.length||unexpected.length)mismatch('label_counts_mismatch',{
+        missing_labels:missing.slice(0,12),unexpected_labels:unexpected.slice(0,12),
+        details_truncated:missing.length>12||unexpected.length>12});
+    }
+    const invalid=independent.filter(label=>!leaves.some(q=>q.label===label&&!q.parent_id&&!composite(q,a)));
+    if(invalid.length)mismatch('independent_structure_mismatch',{invalid_independent_labels:invalid.slice(0,12)});
     return leaves;
   }
   async function confirmCatalog(batch,a,plan){
@@ -618,7 +635,9 @@ async (input) => {
           candidates:candidates.slice(0,5).map(s=>({id:s.id,index:s.index,pdf_pages:[s.start+1,s.start+batch.pages_per_paper],
             ...(ranked?{correct_rate:rate(s)}:{}),pages:Array.from({length:batch.pages_per_paper},(_,i)=>input.origin+B+'/pages/'+(s.start+i)+'?original=true&student_id='+encodeURIComponent(s.id))})),submitted:false};
       }
-      const started=await api('POST',B+'/analysis',{reference_student_id:reference});
+      let started;
+      try{started=await api('POST',B+'/analysis',{reference_student_id:reference});}
+      catch(error){await workflow.rosterConflict(error,executionDeadline);}
       transitions.push({action:'analysis_start_requested',
         response_status:typeof started?.status==='string'?started.status.slice(0,100):null});
       a=await full();

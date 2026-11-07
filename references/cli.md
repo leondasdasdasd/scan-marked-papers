@@ -289,7 +289,7 @@ operation = {"type": "replace_page", "page": 0, "frames": reviewed_page_0_frames
 
 `frames --confirm` 或 run 计划根的 frames 使用同一计划；frames终点不得confirm。run 根还可有 scope、associations、expected_leaf_labels、reference_reviewed。当前部分服务在 frames 确认后以 `catalog_confirmation.kind=confirmed_frames` 自动确认目录并启动全批，不存在可保证的目录先审中间门；去掉 follow 或虚构 stop-after catalog 不能暂停服务端。仅服务端实际返回 awaiting_confirmation 时才走 needs_catalog_review 与 catalog 确认。目录保存可能触发全批重新处理，须读取真实状态并重新全批 check，不沿用历史 ready、不声称仅重算修改题。
 
-**独立计算题。** N个独立算式最终必须是N道可分别查看/订正的业务叶题，不是N框仍一题、N个空或组合题。填写真实expected_leaf_labels，CLI保存并续验粒度目标；核对叶题标签/数量、parent_id=null，排除content.children、composite/virtual_parent、is_composite/isComposite、business_question.isComposite及题型目录isComposite所代表的合题，且无额外父标题题。expected_granularity_verified只是程序核对，不能替代实际目录与必要图证核验。
+**独立计算题。** N个独立算式最终必须是N道可分别查看/订正的业务叶题，不是N框仍一题、N个空或组合题。填写真实expected_leaf_labels，CLI保存并续验粒度目标；按题号多重集合核标签及各自出现次数，独立叶ID须唯一；business_split_mismatch附有界缺失/多余标签计数与原因，不因自然重复题号单独拒绝，也不删断言/清checkpoint绕过。核对叶题数量、parent_id=null，排除content.children、composite/virtual_parent、is_composite/isComposite、business_question.isComposite及题型目录isComposite所代表的合题，且无额外父标题题。expected_granularity_verified只是程序核对，不能替代实际目录与必要图证核验。
 
 身份处理与编号例外严格按 [主技能“未识别姓名与待复核判定”](../SKILL.md#未识别姓名与待复核判定) 执行；无可靠证据则跳过身份操作、保留原卷和未关联，记录卷数/页码/原因，继续不受影响步骤。教师已明确选择跳过时，使用下述显式跳过检查契约，不能假称原批全卷ready或已持久化排除。
 
@@ -327,7 +327,7 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 | --- | --- |
 | `invalid_json_body` | 422 原文“标准卷选择格式无效”；先核对JSON传输/序列化，使用内置脚本，不猜键名。该路由 JSON 解析失败或 body 非对象才触发，ID不存在是另一条错误，不能据此断言平台故障 |
 | `validation_failed` | 按真实 detail 修正有证据的格式/字段，不盲试变体 |
-| `grading_roster_changed` | 仅本batch/start的409原文“关联结果已更新，请刷新后重试”适用；预算未尽时只自动并行回读一次live-state及roster，保留原错误code/retryable=false。recovery_readback返回status=available/incomplete、grading/analysis状态、roster revision及linked/unlinked数，缺为null；两者可用时next_action=review_returned_state_before_resuming。先审回读再按原授权接续，不自动再POST、不授权重试；回读失败不覆盖原错，不输出姓名、答案或凭证 |
+| `grading_roster_changed`及analysis关联版本冲突 | 本batch/start的grading_roster_changed，或analysis POST的明确关联409“关联结果已更新，请刷新后重试”适用，不泛化其他409；预算未尽时只自动并行回读一次live-state及roster，保留原错误code/retryable=false。recovery_readback返回status=available/incomplete、grading/analysis状态、roster revision及linked/unlinked数，缺为null；两者可用时next_action=review_returned_state_before_resuming。先审回读再按原授权接续，不自动再POST、不授权重试；回读失败不覆盖原错，不输出姓名、答案或凭证 |
 | `roster_version_conflict` | 返回expected_revision、current_revision及仅本计划paper的current_assignments；按read_roster_and_rebuild_plan核实当前关联、证据与剩余范围后重建计划，不自动改revision或重放旧包 |
 | `version_conflict` | 回读当前版本、范围和实际保存内容，再判断剩余动作 |
 | `classroom_login_required` | 先 access，再按诊断 relogin 一次；包括HTTP200业务体的已知428失效响应，其他428不推断为登录问题 |
