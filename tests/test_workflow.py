@@ -98,6 +98,8 @@ test('paused organizer exposes bounded server recovery hints without extra reads
  assert.equal(d.result.recovery.error_code,'GATEWAY_BINDING_REQUIRED');
  assert.equal(d.result.recovery.recovery_action,'resume_with_session');
  assert.equal(d.result.recovery.server_resume_authorized,true);assert.equal(d.result.retry_authorized,false);
+ assert.equal(d.result.resume_context.reference_student_id,'p1');assert.equal(d.result.resume_context.source_pdf_sha256,w.a.source_pdf_sha256);
+ assert.equal(d.result.resume_context.frame_revision,'r1');assert.equal(d.result.resume_context.catalog_revision,null);
  assert.equal(d.result.next_action,'verify_current_session_and_authorized_resume');
  assert(w.trace.every(([m])=>m==='GET'));assert.equal(w.trace.filter(([,p])=>p.includes('/analysis?')).length,1);
  assert(!JSON.stringify(d.result).includes('private-fixture'));

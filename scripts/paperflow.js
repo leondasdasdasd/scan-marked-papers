@@ -531,7 +531,9 @@ async (input) => {
       }catch(e){detailsStatus='unavailable';detailsError={code:e.code||'api_failed',status:e.details?.status??null,
         next_action:e.details?.next_action||'read_state_before_retry'};}
     }
-    return {student_state_counts:counts,failed_papers:failed,incomplete_papers:incomplete,read_version:a.read_version,failure_details_status:detailsStatus,
+    return {student_state_counts:counts,failed_papers:failed,incomplete_papers:incomplete,read_version:a.read_version,
+      resume_context:{reference_student_id:a.reference_student_id??null,source_pdf_sha256:a.source_pdf_sha256??null,
+        frame_revision:a.frame_revision??null,catalog_revision:a.catalog_revision??null},failure_details_status:detailsStatus,
       recovery:recoveryHints(a),
       ...(detailsError?{failure_details_error:detailsError}:{}),
       ...(a.error||a.catalog_error?{analysis_error:String(a.error||a.catalog_error).slice(0,500)}:{}),
