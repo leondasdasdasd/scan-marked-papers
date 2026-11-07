@@ -40,7 +40,7 @@ stop_after在派发前写入本次checkpoint，后续省略--stop-after时沿用
 
 ## 入口与输出
 
-参数由智能体从当前环境获取，不交给老师配置。Python全局参数放在子命令前；zsh复用命令用函数或数组（如 `pf=(python3 <入口> <全局参数>); "${pf[@]}" access`），不把整条命令存字符串 `$PF` 执行；已有链接优先 `--batch-url <记录链接>`，从经核实的http(s)业务路由提取origin/batch id。也可用 `--base-url <origin> --batch-id <ID>`；缺 batch 时从 `--checkpoint` 的同 origin 已绑定 batch_id 恢复，错 origin 拒绝。base-url默认 `https://piyue.yungu.org`，显式参数与链接冲突会拒绝。access/relogin/classes/api-list/api-call/upload及session-connect/status/close可在没有batch时使用，其他命令按实际要求定位本批。默认地址不证明生产；授权浏览器必须同源，不跟随意外重定向。
+参数由智能体从当前环境获取，不交给老师配置。Python全局参数放在子命令前；zsh复用命令用函数或数组（如 `pf=(python3 <入口> <全局参数>); "${pf[@]}" access`），不把整条命令存字符串 `$PF` 执行；已有链接优先 `--batch-url <记录链接>`，从经核实的http(s)业务路由提取origin/batch id。也可用 `--base-url <origin> --batch-id <ID>`；缺 batch 时从 `--checkpoint` 的同 origin 已绑定 batch_id 恢复，错 origin 拒绝。base-url默认 `https://piyue.yungu.org`，显式参数与链接冲突会拒绝。access/relogin/classes/api-list/api-call/upload及session-connect/status/close可在没有batch时使用，其他命令按实际要求定位本批。默认地址不证明生产；授权浏览器必须同源，不跟随意外重定向。需要登录凭证时，沿宿主已提供的全局/项目指令准确路径读取任务所需字段，不只查当前目录；已知来源不重复向用户索要，原文不进入输出。公开技能不记录本机私有凭证路径或内容；凭证可用不扩展操作授权。
 
 按现有能力选一路，不擅装工具：
 
@@ -210,7 +210,7 @@ api-list离线列出83项操作的purpose、method/path、允许query、required
 
 写计划增加body（仅JSON传输）、`evidence_confirmed:true`和非空evidence_note；transport=empty的操作完全不传body，不用`{}`替代。review类写入还须`expected.read_version`与当前full analysis的read_version一致，工具才运行时注入review_token；task-stop须body.kind和`expected.started_at`匹配当前任务再运行时取控制token。其他操作按真实revision/source_version等字段核对。任何token都禁止人工填入计划或输出。
 
-GET返回api_result/data；成功写入返回api_saved/data，PATCH/PUT另附权威readback。stdout大结果为摘要，核实具体持久化字段时从全局--output的完整去凭证结果读取，不能把摘要缺字段误判为服务端未返回。HTTP200不代表后续任务或全批业务完成。upload、目录确认及imports属于special操作，普通api-call返回dedicated_command_required，分别用upload/catalog/sync，不改registry或手写请求绕过。只有用户本次明确接续时才在适用启动/恢复计划写resume_authorized=true；只读请求不恢复停止任务。
+GET返回api_result/data；成功写入返回api_saved/data，PATCH/PUT另附权威readback。stdout大结果为摘要，核实具体持久化字段时从全局--output的完整去凭证结果读取，不能把摘要缺字段误判为服务端未返回。session摘要保留ok、xueersi_configured、doubao_configured、model_configured、当前model、models_count及已配置models的workflows/capabilities；model_capabilities_included=false表示本次未包含模型能力，不能据此判定模型不可用。能力字段不足时先定点读取本次--output完整结果，不立即改走页面重查；按所需阶段核验，不自动选择供应商。HTTP200不代表后续任务或全批业务完成。upload、目录确认及imports属于special操作，普通api-call返回dedicated_command_required，分别用upload/catalog/sync，不改registry或手写请求绕过。只有用户本次明确接续时才在适用启动/恢复计划写resume_authorized=true；只读请求不恢复停止任务。
 
 ## grading编排与明确同步
 
@@ -309,6 +309,7 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 | `validation_failed` | 按真实 detail 修正有证据的格式/字段，不盲试变体 |
 | `version_conflict` | 回读当前版本、范围和实际保存内容，再判断剩余动作 |
 | `classroom_login_required` | 先 access，再按诊断 relogin 一次；包括HTTP200业务体的已知428失效响应，其他428不推断为登录问题 |
+| `origin_mismatch` | 按expected_origin、actual_origin与next_action=verify_browser_origin_and_login核对当前页面及本次目标；两者仅为origin，不记录含query/token的完整URL。错源不等于账号失效，不自动导航；确需登录恢复时沿既有授权流程处理，回到目标origin后重新access核验 |
 | `login_required`、`permission_denied` | 按当前诊断处理正常登录/权限；不绕过身份或改目标环境 |
 | `browser_backend_unavailable` | 当前后端不可用；按 use_emit_script 提示，核实已有浏览器 evaluate 后改用脚本桥接，无此能力则用页面 |
 | `existing_playwright_cli_unavailable` | 显式 JS 入口或现有 Node 缺失；保留具体诊断，不回退已失败的 wrapper/npx、不下载安装 |

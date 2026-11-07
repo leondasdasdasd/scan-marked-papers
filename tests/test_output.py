@@ -13,6 +13,24 @@ paperflow = importlib.import_module('paperflow')
 
 
 class OutputTests(unittest.TestCase):
+    def test_session_summary_preserves_supplier_and_workflow_decisions_without_private_fields(self):
+        session={'ok':True,'user':{'name':'private-name'},'cookie':'secret',
+            'xueersi_configured':True,'doubao_configured':False,'model_configured':True,'model':'grading-only',
+            'models':{'grading-only':{'configured':True,'workflows':{'grading':True,'analysis':False},'capabilities':['images'],'token':'secret'},
+                'analysis-model':{'configured':True,'workflows':{'grading':True,'analysis':True},'capabilities':['images','json_schema']},
+                'unavailable':{'configured':False,'error':'private-provider-detail'}}}
+        full={'ok':True,'result':{'operation':'session','data':session}}
+        result=paperflow.compact(full)['result']['data']
+        self.assertTrue(result['xueersi_configured']);self.assertFalse(result['doubao_configured'])
+        self.assertEqual(result['model'],'grading-only');self.assertEqual(result['models_count'],3)
+        self.assertFalse(result['models']['grading-only']['workflows']['analysis'])
+        self.assertTrue(result['models']['analysis-model']['workflows']['analysis'])
+        self.assertNotIn('unavailable',result['models']);self.assertNotIn('secret',json.dumps(result))
+        self.assertNotIn('private-',json.dumps(result));self.assertEqual(len(session['models']),3)
+        full['result']['data']={'ok':True,'xueersi_configured':True}
+        result=paperflow.compact(full)['result']['data']
+        self.assertFalse(result['model_capabilities_included']);self.assertNotIn('models',result)
+
     def test_filtered_directories_compact_only_already_selected_options(self):
         full={'ok':True,'result':{'outcome':'class_directory','source':'general',
             'scope_query':{'grade':'6','subject_id':'14','course_id':'658'},

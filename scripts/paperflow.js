@@ -13,7 +13,8 @@ async (input) => {
   let authReceipt=input.checkpoint?.auth_receipt||null;
   const clone=x=>JSON.parse(JSON.stringify(x));
   const fail=(code,details={})=>{throw Object.assign(new Error(code),{code,details});};
-  if(location.origin!==input.origin)return {ok:false,error:{code:'origin_mismatch'}};
+  if(location.origin!==input.origin)return {ok:false,error:{code:'origin_mismatch',
+    expected_origin:input.origin,actual_origin:location.origin,next_action:'verify_browser_origin_and_login'}};
   if(input.checkpoint?.origin&&(input.checkpoint.origin!==input.origin||input.batch&&input.checkpoint.batch_id!==input.batch))
     return {ok:false,error:{code:'checkpoint_origin_or_batch_mismatch'}};
   async function api(method,path,body,extraHeaders={}) {

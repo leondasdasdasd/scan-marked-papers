@@ -204,7 +204,18 @@ def compact(data):
                 data['items']=[{k:v for k,v in item.items() if k in ('id','name','state','status','stage','counts','local_changed')}
                     for item in value['items'] if isinstance(item,dict)]
             return data
-        if r['operation'] not in ('classes','general-options','class-students','recent-selection','recent-classes','sync-options','sync-courses','import-links','correction-item'):
+        if r['operation']=='session':
+            session=r['data']
+            r['data']={k:session[k] for k in ('ok','xueersi_configured','doubao_configured','model_configured','model') if k in session}
+            models=session.get('models')
+            r['data']['model_capabilities_included']=isinstance(models,dict)
+            if isinstance(models,dict):
+                r['data']['models_count']=len(models)
+                r['data']['models']={name:{'configured':True,
+                    'workflows':{k:v for k,v in (details.get('workflows') or {}).items() if type(v) is bool},
+                    'capabilities':details.get('capabilities',[])}
+                    for name,details in models.items() if isinstance(details,dict) and details.get('configured') is True}
+        elif r['operation'] not in ('classes','general-options','class-students','recent-selection','recent-classes','sync-options','sync-courses','import-links','correction-item'):
             r['data']=summary(r['data'])
             if isinstance(r.get('readback'),dict):r['readback']=summary(r['readback'])
     result['result']=r
