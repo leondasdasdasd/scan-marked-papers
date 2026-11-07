@@ -65,10 +65,15 @@ async (input) => {
       (Array.isArray(types)&&types.some(t=>String(t.businessQuestionTypeId)===String(q.businessQuestionTypeId)&&t.isComposite===true));
   }
   function snapshot(batch,a) {
+    const types=a.business_question_catalog?.types||a.question_type_templates||[];
     return {batch_id:batch.id,workflow_mode:batch.workflow_mode,pages_per_paper:batch.pages_per_paper,
       total_pages:batch.total_pages,analysis_status:a.status,read_version:a.read_version,frame_revision:a.frame_revision,
       catalog_revision:a.catalog_revision,analysis_confirmation_version:batch.analysis_confirmation_version||a.analysis_confirmation_version,
       source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
+      reference_preparation:a.reference_preparation?Object.fromEntries(Object.entries(a.reference_preparation)
+        .filter(([key])=>['status','remaining','issues','error_code','recovery_action','retryable'].includes(key))):null,
+      business_question_types:(Array.isArray(types)?types:[]).filter(t=>t&&typeof t==='object').map(t=>
+        Object.fromEntries(Object.entries(t).filter(([key])=>['id','businessQuestionTypeId','name','isComposite'].includes(key)))),
       precut_diagnosis:a.status==='awaiting_frames'?frameProblem(a,batch.pages_per_paper):null,
       reference_start:a.reference_start,frames:(a.frames||[]).map(f=>({id:f.id,label:f.label,parent_id:f.parent_id||null,regions:f.regions,source:f.source})),
       questions:(a.questions||[]).map(catalogQuestion),
@@ -81,6 +86,11 @@ async (input) => {
     const plain=v=>Array.isArray(v)?v.map(plain):v&&typeof v==='object'?
       typeof v.text==='string'?{text:v.text}:Object.fromEntries(Object.entries(v).filter(([k])=>!['html','json'].includes(k)).map(([k,x])=>[k,plain(x)])):v;
     return {id:q.id,label:q.label,parent_id:q.parent_id||null,conversion_status:q.conversion_status,
+      ...Object.fromEntries(['stem','standard_answer','standard_answer_source','explanation','group','subquestion_stem',
+        'response_definitions','composite','virtual_parent','is_composite','isComposite','businessQuestionTypeId',
+        'question_type_version','question_type_name','question_type_context','regions','source_frame_ids']
+        .filter(key=>q[key]!==undefined).map(key=>[key,q[key]])),
+      business_question_is_composite:q.business_question?.isComposite??null,
       issue_count:(q.issues||[]).length,question_type_key:q.content?.questionTypeKey,
       child_count:(q.content?.children||[]).length,
       elements:(q.content?.elements||[]).map(e=>({type:e.type,text:text(e.content),
@@ -187,6 +197,8 @@ async (input) => {
     if(plan.reference_reviewed!==true||plan.scope_reviewed!==true)fail('reference_review_required');
   }
   async function apply(batch,a,plan,confirm){
+    if(confirm&&stopAfter==='frames')fail('precut_endpoint_confirmation_blocked',{
+      next_action:'select_check_endpoint_to_continue_organization',retryable:false});
     if(!plan||typeof plan.operation_id!=='string'||!plan.operation_id)fail('edit_plan_required');
     reviewGuard(plan,a,batch);
     if(frameProblem(a,batch.pages_per_paper)&&!plan.operations?.length)fail('precut_recovery_required');
@@ -213,7 +225,8 @@ async (input) => {
       await api('POST',B+'/analysis/frames/confirm',{frame_revision:next.frame_revision});
       transitions.push({action:'frames_confirmed'});
     }
-    return {already_applied:already,frame_revision:next.frame_revision,frame_count:next.frames.length};
+    return {already_applied:already,frame_revision:next.frame_revision,frame_count:next.frames.length,
+      review:snapshot(batch,next)};
   }
   async function inspectOrCheck(action,snapshot){
     const d=await legacy({...input,action,snapshot,api,deadline:executionDeadline,prepare:action==='check'});
@@ -515,7 +528,12 @@ async (input) => {
     }while(true);
   }
   async function run(){
-    if(!['grading','check'].includes(stopAfter))fail('invalid_stop_after');
+    if(!['grading','frames','check'].includes(stopAfter))fail('invalid_stop_after');
+    if(stopAfter==='frames'&&(input.plan?.catalog||input.plan?.associations))fail('precut_endpoint_plan_conflict');
+    const pastPrecut=a=>stopAfter==='frames'&&(a.frames_confirmation?.by||a.catalog_confirmation||
+      ['frames_confirmed','catalog_confirmed','awaiting_confirmation','completed','partial'].includes(a.status));
+    const precutPassed=a=>({outcome:'precut_stage_passed',analysis_status:a.status,stop_after:'frames',
+      organization_started:true,stage_reverted:false,submitted:false});
     const readonly=await control({resume:input.plan?.resume_authorized===true});if(readonly)return readonly;
     if(input.observe_analysis){
       const observed=await observeAnalysis(executionDeadline);
@@ -527,12 +545,18 @@ async (input) => {
     const batch=await api('GET',B);
     if(!['scan','grading'].includes(batch.workflow_mode))return {outcome:'unsupported_workflow',submitted:false};
     if(stopAfter==='grading'&&batch.workflow_mode!=='grading')fail('grading_endpoint_requires_grading');
+    if(stopAfter==='frames'&&!workflow.organizer(batch))return {outcome:'precut_endpoint_unsupported',
+      workflow_mode:batch.workflow_mode,grading_engine:batch.grading_engine,stop_after:'frames',
+      organization_started:false,submitted:false};
+    let a=stopAfter==='frames'?await full():null;
+    if(a&&pastPrecut(a))return precutPassed(a);
     await selectScope(input.plan?.scope);
     if(batch.workflow_mode==='grading'){
       const pending=await workflow.grade(batch);if(pending)return {...pending,stop_after:stopAfter};
       if(stopAfter==='grading')return workflow.gradingSummary(batch);
+      a=null;
     }
-    let a=await full();
+    a=a||await full();
     if(batch.workflow_mode==='grading'&&!workflow.organizer(batch)&&(!a.status||a.status==='not_generated')){
       await api('POST',B+'/lesson-practice/prepare-analysis');transitions.push({action:'analysis_preparation_started'});a=await full();
     }
@@ -556,10 +580,18 @@ async (input) => {
     const deadline=executionDeadline;
     const visited=new Set();
     for(let n=0;n<25;n++){
+      if(pastPrecut(a))return precutPassed(a);
       if(a.status==='awaiting_frames'){
         const problem=frameProblem(a,batch.pages_per_paper);
         if(problem&&!input.plan?.frames)return {outcome:'needs_precut_recovery',diagnosis:problem,review:snapshot(batch,a),submitted:false};
-        if(!input.plan?.frames)return {outcome:'needs_frame_review',review:snapshot(batch,a),submitted:false};
+        if(!input.plan?.frames)return {outcome:'needs_frame_review',review:snapshot(batch,a),
+          ...(stopAfter==='frames'?{stop_after:'frames',stopped_at:'frames',organization_started:false,
+            business_questions_verified:false}:{}),submitted:false};
+        if(stopAfter==='frames'){
+          const saved=await apply(batch,a,input.plan.frames,false);
+          return {outcome:'precut_prepared',stop_after:'frames',stopped_at:'frames',
+            organization_started:false,business_questions_verified:false,...saved,submitted:false};
+        }
         await apply(batch,a,input.plan.frames,true);a=await full();
       }else if(['generating','catalog_confirmed','frames_confirmed','processing'].includes(a.status)){
         const state=await observeAnalysis(deadline);

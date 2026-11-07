@@ -70,6 +70,59 @@ function plan(w){
 const input=(action,extra={})=>({origin:location.origin,batch:'test',action,timeout:1,interval:2,...extra});
 const tests=[];
 function test(name,fn){tests.push([name,fn]);}
+test('frames endpoint saves geometric splits without confirming or organizing',async()=>{
+ const w=world(),p=plan(w);
+ const d=await main(input('run',{stop_after:'frames',plan:{frames:p}}));
+ assert(d.ok);assert.equal(d.result.outcome,'precut_prepared');
+ assert.equal(d.result.organization_started,false);assert.equal(d.result.business_questions_verified,false);
+ assert.equal(d.checkpoint.stop_after,'frames');assert.equal(w.patches,1);
+ assert.equal(w.a.status,'awaiting_frames');assert.equal(w.a.questions.length,0);
+ assert.equal(d.result.review.frames.length,7);assert.equal(d.result.review.frame_revision,w.a.frame_revision);
+ assert(!w.trace.some(([m,path])=>m==='POST'||path.includes('/preflight')||path.includes('/progress')));
+ const before=w.trace.length;
+ const blocked=await main(input('frames',{checkpoint:d.checkpoint,plan:p,confirm:true}));
+ assert.equal(blocked.error.code,'precut_endpoint_confirmation_blocked');
+ assert(w.trace.slice(before).every(([m])=>m==='GET'));
+ const resumed=await main(input('run',{stop_after:'check',checkpoint:d.checkpoint,plan:{frames:p}}));
+ assert(resumed.ok&&resumed.result.ready);assert.equal(w.patches,1);
+ assert.equal(resumed.checkpoint.stop_after,'check');
+});
+test('frames endpoint reports review boundary and refuses unsupported or passed stages without writes',async()=>{
+ let w=world();
+ let d=await main(input('run',{stop_after:'frames'}));
+ assert.equal(d.result.outcome,'needs_frame_review');assert.equal(d.result.organization_started,false);
+ assert(w.trace.every(([m])=>m==='GET'));
+ w=world();w.finish();d=await main(input('run',{stop_after:'frames',plan:{scope:{revision:1,
+  evidence_confirmed:true,evidence_note:'fixture verified change',semester_id:'1',class_ids:['3'],scope:{source:'teaching'}}}}));
+ assert.equal(d.result.outcome,'precut_stage_passed');assert.equal(d.result.stage_reverted,false);
+ assert(w.trace.every(([m])=>m==='GET'));assert.equal(w.roster.revision,1);
+ w=world();w.batch.workflow_mode='grading';w.batch.grading_engine='llm';
+ d=await main(input('run',{stop_after:'frames'}));
+ assert.equal(d.result.outcome,'precut_endpoint_unsupported');assert.equal(w.starts,0);
+ assert(w.trace.every(([m])=>m==='GET'));
+});
+test('frames endpoint does not silently accept catalog or association writes',async()=>{
+ const w=world();const d=await main(input('run',{stop_after:'frames',plan:{catalog:{},associations:{}}}));
+ assert.equal(d.error.code,'precut_endpoint_plan_conflict');assert.equal(w.trace.length,0);
+});
+test('catalog snapshot retains authoritative answers and independent response structure without students',async()=>{
+ const w=world();w.finish();
+ Object.assign(w.a,{read_version:'catalog-source-version',reference_preparation:{status:'ready',remaining:0,artifact_token:'not-in-snapshot'},
+  business_question_catalog:{types:[{businessQuestionTypeId:'type-1',isComposite:true,name:'fixture'}]}});
+ Object.assign(w.a.questions[0],{stem:'$1+2$ with shared context',standard_answer:'3',standard_answer_source:'teacher_reference',
+  explanation:'fixture explanation',group:'shared instruction',subquestion_stem:'child',composite:{id:'parent'},
+  businessQuestionTypeId:'type-1',response_definitions:[{id:'response-1',type:'textResponse',blank_ids:['b1']}],
+  business_question:{isComposite:true}});
+ const d=await main(input('snapshot'));assert(d.ok);const q=d.result.questions[0],source=w.a.questions[0];
+ for(const key of ['stem','standard_answer','standard_answer_source','explanation','group','subquestion_stem','composite','response_definitions'])
+  assert.deepEqual(q[key],source[key]);
+ assert.equal(q.business_question_is_composite,true);
+ assert.equal(d.result.business_question_types[0].isComposite,true);
+ assert.equal(d.result.read_version,w.a.read_version);
+ assert.equal(d.result.reference_preparation.status,'ready');
+ assert(!JSON.stringify(d.result).includes('not-in-snapshot'));
+ assert(!('students' in d.result));assert.equal(w.trace.length,2);
+});
 test('9 edits are validated before one write and six independent business questions are checked',async()=>{
  const w=world(),p=plan(w);const d=await main(input('run',{plan:{frames:p}}));
  assert(d.ok);assert(d.result.ready);assert.equal(w.patches,1);assert.equal(w.a.questions.length,7);

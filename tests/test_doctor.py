@@ -48,6 +48,17 @@ class DoctorTests(unittest.TestCase):
         self.assertIn('references/cli.md',checked['modified']);self.assertIn('agents/openai.yaml',checked['unsafe'])
         self.assertFalse(self.marker.exists())
 
+    def test_optional_pdf_tools_do_not_block_browser_image_workflow(self):
+        unavailable=json.dumps({'pymupdf':False,'PIL.Image':False,'PIL.ImageDraw':False})
+        with patch('paperflow_runtime.python_candidates',return_value=[]),patch.object(paperflow_doctor.subprocess,'run',
+                return_value=subprocess.CompletedProcess([],0,stdout=unavailable,stderr='')):
+            result=paperflow_doctor.doctor(self.args,self.root)
+        self.assertTrue(result['ok'],result)
+        runtime=result['result']['python']
+        self.assertFalse(runtime['parser_available']);self.assertFalse(runtime['renderer_available'])
+        self.assertIsNone(runtime['parser_python']);self.assertIsNone(runtime['renderer_python'])
+        self.assertFalse(self.marker.exists());self.assertFalse(result['result']['business_execution_verified'])
+
     def test_default_python_cli_finds_explicit_existing_renderer_without_updates(self):
         system=Path('/usr/bin/python3')
         if not system.is_file():self.skipTest('no separate system Python')

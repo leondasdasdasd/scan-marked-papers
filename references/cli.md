@@ -1,6 +1,6 @@
 # 批量 CLI 编排
 
-本说明对应主入口 `scripts/paperflow.py` 与 `paperflow.js`；`paperflow_base.py`仅为旧兼容入口。三种业务流程——已批扫描、供应商快速批改、答案卷智能批改——直接用专用CLI/run；参数查当前子命令help，本参考只读当前入口或阶段，未覆盖才查api-list及对应契约，不预读API全文或适配器源码。只有接口不支持/不兼容或工具缺能力的具体证据，才定点回退页面。先按SKILL.md让老师选定处理模式、批改后是否整理及是否同步。只批改用run --stop-after grading，整理路径用run --stop-after check；同步在检查后另走明确授权的sync。已有导入与停止标记优先只读。办公接入边界见 [office-agents.md](office-agents.md)。
+本说明对应主入口 `scripts/paperflow.py` 与 `paperflow.js`；`paperflow_base.py`仅为旧兼容入口。三种业务流程——已批扫描、供应商快速批改、答案卷智能批改——直接用专用CLI/run；参数查当前子命令help，本参考只读当前入口或阶段，未覆盖才查api-list及对应契约，不预读API全文或适配器源码。只有接口不支持/不兼容或工具缺能力的具体证据，才定点回退页面。先按SKILL.md让老师选定处理模式、批改后是否整理及是否同步。只批改用run --stop-after grading，仅预切准备用run --stop-after frames，整理路径用run --stop-after check；同步在检查后另走明确授权的sync。已有导入与停止标记优先只读。办公接入边界见 [office-agents.md](office-agents.md)。
 
 ## 每天首次使用与版本重载
 
@@ -16,9 +16,9 @@
 python3 <技能目录>/scripts/paperflow.py doctor --read-timeout 10
 ```
 
-`doctor` 无需 PDF、batch 或 session，不触发更新、不安装、不联网、不登录，不运行 wrapper 或启动浏览器。`installation` 核对完整 manifest 及其发行文件哈希；完整性失败则跳过环境 helper。`python` 通过实际 import 检查已有解释器，返回 `parser_python`、`renderer_python` 和 `attempts`；read-timeout 仅为 Python 候选共享预算，isolated 另有最多3秒的本地 Node fetch/WebSocket 能力检查，不承诺整个 doctor 的硬墙钟预算。
+`doctor` 无需 PDF、batch 或 session，不触发更新、不安装、不联网、不登录，不运行 wrapper 或启动浏览器。`installation` 核对完整 manifest 及其发行文件哈希；完整性失败则跳过环境 helper。`python`回执的ok仅表示当前Python解释器可用，并返回interpreter、parser_available、renderer_available及原有parser_python/renderer_python/attempts；解析或渲染能力缺失分别为false/null，单独缺它们不令doctor总ok失败。完整性、helper或所选浏览器入口缺失仍失败；read-timeout 仅为 Python 候选共享预算，isolated 另有最多3秒的本地 Node fetch/WebSocket 能力检查，不承诺整个 doctor 的硬墙钟预算。
 
-`browser.entrypoint_found` 只表示所选入口的静态条件具备，`execution_verified`、`authentication_verified` 均为 false；wrapper 存在不证明调用契约或鉴权。isolated 不连接会话；若显式指定 session，仅只读本地控制文件是否存在以匹配实际 backend，不读取凭证。结果中 `network_checked=false`、`business_execution_verified=false`，outcome 为 `offline_prerequisites_available` 或 `offline_prerequisites_incomplete`，不能将前者当作真实业务验收通过。
+`browser.entrypoint_found` 只表示所选入口的静态条件具备，`execution_verified`、`authentication_verified` 均为 false；wrapper 存在不证明调用契约或鉴权。isolated 不连接会话；若显式指定 session，仅只读本地控制文件是否存在以匹配实际 backend，不读取凭证。结果中 `network_checked=false`、`business_execution_verified=false`，outcome 为 `offline_prerequisites_available` 或 `offline_prerequisites_incomplete`，不能将前者当作真实业务验收通过。新PDF的prepare/upload仍须parser_available对应的真实页数解析；已有批次与平台图片主路径不因可选renderer缺失而停止。doctor不证明图片可读、认证有效或业务通过，无新增参数或自动安装。
 
 ```bash
 python3 <技能目录>/scripts/paperflow.py prepare --file <本轮PDF> --pages-per-paper <已核实每份页数> --read-timeout 10
@@ -26,7 +26,7 @@ python3 <技能目录>/scripts/paperflow.py prepare --file <本轮PDF> --pages-p
 
 `prepare` 仅在本轮首次接到新文件、需要核实文件或本地执行能力时运行一次，复用结果，不作为每条命令前的重复步骤。`--pages-per-paper` 可省略；未核实分卷边界不能靠工具默认值猜测。它离线运行，无需 batch 或 browser-session，不联网更新、不安装依赖。
 
-文件有界读取并给出 SHA-256、字节数、PDF 头、真实页数、page_geometry（width_points/height_points、按3pt容差确定的A3/A4或null、orientation及pages）及耗时，有每份页数时给paper_count和分卷校验。`prepare` 与 `upload` 使用同一 PDF 预检：当前 Python 缺 pymupdf 时，在原 read-timeout 剩余预算内按下文审图环境发现范围尝试已有解释器，不安装依赖；没有可用解析器返回 `pdf_parser_unavailable`，不将页数未知当作预检成功。无论是否传 pages-per-paper，真实总页数都须为1–600，越界返回 `invalid_pdf_page_count`；需要密码的加密 PDF 返回 `pdf_password_required`，不索要或保存密码、不自动解密。保留 PDF 头、哈希、分卷及100MiB上限校验。
+文件有界读取并给出 SHA-256、字节数、PDF 头、真实页数、page_geometry（width_points/height_points、按3pt容差确定的A3/A4或null、orientation及pages）及耗时，有每份页数时给paper_count和分卷校验。`prepare` 与 `upload` 使用同一 PDF 预检：当前Python缺pymupdf时，在原read-timeout剩余预算内按已有Python发现范围尝试现成解释器，不安装依赖；没有可用解析器返回 `pdf_parser_unavailable`，不将页数未知当作预检成功。无论是否传 pages-per-paper，真实总页数都须为1–600，越界返回 `invalid_pdf_page_count`；需要密码的加密 PDF 返回 `pdf_password_required`，不索要或保存密码、不自动解密。保留PDF头、哈希、分卷及100MiB上限校验。Python是CLI入口依赖，以上解析为材料预检需求，与可选review的PyMuPDF/Pillow渲染分开；平台图片审阅不要求先生成本地图包。
 
 复用已核结果，不因另一个解释器缺模块重复换读法或安装；物理尺寸不等于分卷、页序或双面已审。默认读取上限 10 秒，`pdf_read_timeout` 的下一步是 `use_existing_file_tool_or_accessible_copy`，不推断 TCC 或其他权限根因。停止重复 ls/hash/换读法，回收本轮自建挂起只读任务；由现有已授权文件工具提供可读副本后只验证一次，已有可信源哈希时核对一致，不让老师排查技术参数。不能读取则保留具体阻塞，不把“文件存在”当成可上传。
 
@@ -34,7 +34,9 @@ python3 <技能目录>/scripts/paperflow.py prepare --file <本轮PDF> --pages-p
 
 ## 教师选择与阶段终点
 
-老师选择只批改时，`run --stop-after grading`仅推进原始批改，核对全批done、缺失/失败状态与基础结果计数；grading_completed要求本批非空、卷ID无重复、全批done，且每份有results、judgments或provider_results结果证据；done但缺结果仍是grading_incomplete，不自动重批done。基础verdict计数保留uncertain/unknown，不视为全部判断准确；organization_started=false只说明本次命令没有启动整理，不能据此声称服务端以前没有整理。该终点不读取analysis、不生成题框/目录、不准备媒体或preflight。整理路径用`run --stop-after check`；扫描本身包含整理，不能指定grading终点。同步选择先完成check，再按专用sync提交，不让run直接提交课堂。
+老师选择只批改时，`run --stop-after grading`仅推进原始批改，核对全批done、缺失/失败状态与基础结果计数；grading_completed要求本批非空、卷ID无重复、全批done，且每份有results、judgments或provider_results结果证据；done但缺结果仍是grading_incomplete，不自动重批done。基础verdict计数保留uncertain/unknown，不视为全部判断准确；organization_started=false只说明本次命令没有启动整理，不能据此声称服务端以前没有整理。该终点不读取analysis、不生成题框/目录、不准备媒体或preflight。整理路径用`run --stop-after check`；扫描不能指定grading终点；不继续全批整理时可选择下述frames准备终点。同步选择先完成check，再按专用sync提交，不让run直接提交课堂。
+
+`run --stop-after frames`仅支持scan及xueersi/doubao统一organizer，先完成必要原始批改与预切；legacy LLM启动前返回precut_endpoint_unsupported。仅真实awaiting_frames可保存已实际审图的必要几何拆题/异常修复计划，不confirm；无审阅计划返回needs_frame_review，有有效计划后返回precut_prepared、organization_started=false、business_questions_verified=false与review元数据。这仅为预切/几何准备，不是业务目录、全批整理或check完成。已越过题框门只读返回precut_stage_passed，不回退；此终点单独frames --confirm也拒绝。checkpoint记住frames，后来明确继续整理才用run --stop-after check切换。
 
 stop_after在派发前写入本次checkpoint，后续省略--stop-after时沿用；老师明确变更终点时显式传新--stop-after覆盖原目标；旧checkpoint没有该字段时CLI兼容默认check，这只是工具兼容行为，不能替代老师选择，智能体须先补清缺少的业务终点。老师已在当前会话为同一材料明确选择时不再问；跨材料不能照搬。选项未明确时只做只读检查，不以CLI默认值启动写任务。
 
@@ -132,23 +134,27 @@ emit即使带--follow也只运行一轮timeout预算，不持续后台跟进；w
 
 正常 `run --follow` 跨 waiting 续接时，若上轮已明确分析活跃，内部观察保留 imports/task control 检查，稳定阶段省去重复 batch/catalog 读取；阶段变化后再次检查 control 并作权威读取才继续。此优化不新增 CLI 开关，不改变写前保护或 emit 跨轮管理。状态与进度相同时，等待间隔以1.5倍退避，上限为 `min(3*interval,15秒)`；进度变化回到 interval，睡眠不越过单轮 deadline。分析与媒体共享执行 deadline；Python follow 每轮 timeout 仅取剩余 max-seconds。分析观察器仅对本批 `GET /api/batches/<batch_id>/analysis/status` 返回503且原文为“分析状态正在更新，请稍后重试”时，在原 deadline 内有界等待并最多额外读取2次；成功读取后清零连续失败计数。耗尽次数或预算时保留 `analysis_status_updating` 诊断；其他503、写请求及模型传输不因此自动重试。业务 HTTP 在途仍可能使实际墙钟超过预算，这些预算不是硬超时或服务端完成承诺，减少轮询也不证明真实处理更快。
 
-emit 结果已 collect 且有本地原 PDF 时，可直接复用元数据生成校对包，无须再读浏览器：
+复用snapshot及run回执review中已有的reference_pages：每项为{page:参考卷0-based页,url:同源原页URL}，不含pdf_page；定位不渲染、不证明已审，合法参考信息缺失时不猜链接。优先复用reference_pages、needs_reference候选pages及已有evidence题图定位，通过宿主实际读图或现有截图核验，URL本身不是审图回执。
+
+审图优先现有平台图片或浏览器截图，按宿主现成能力核验全部参考原页、真实题目及异常；题图截断上下文/批注时回看原页，不保证认证URL可直接查看，不另写截图框架。不要为审图默认下载完整PDF或本地批量渲染。仅离线材料、平台图不可用或明确像素校准等具体理由才选本地回退，记录理由；渲染依赖不足不自动阻塞其他业务。
+
+可选本地回退：emit结果已collect且已有本地原PDF时，复用元数据生成校对包，无须再读浏览器：
 
 ```bash
 python3 <技能目录>/scripts/paperflow.py --batch-url <本次记录链接> review --metadata <受控目录/result.json> --pdf <本次原PDF> --out <受控目录/review>
 ```
 
-metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 result.review；必须匹配本次 batch_id，并严格核验原 PDF SHA。校对包输出原页、按参考相对页分组且每张最多6框/限高分页的带上下文逐框联系图，以及frame-index.json；索引绑定source_pdf_sha256与frame_revision，用于定位原页、题框和联系图。所有生成结果始终reviewed=false，不自动认定QA通过，也不继承其他智能体已审。review_dependency_unavailable表示当前执行环境无可用渲染依赖，复用已验证的现成Python或同SHA/frame_revision的现成图包，不自动安装；不能仅凭local_execution_failed错误名推断缺依赖或权限。当前智能体实际核对原页和逐框联系图；来源、题框版本及 frames 均未变时复用本轮已生成图证，不继承其他智能体的审图结论；仅具体未决异常补定位图，一次汇总修改后核验受影响框及全页覆盖，无新异常不重复渲染、放大或裁剪。
+metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 result.review；必须匹配本次 batch_id，并严格核验原 PDF SHA。校对包输出原页、按参考相对页分组且每张最多6框/限高分页的带上下文逐框联系图，以及frame-index.json；索引绑定source_pdf_sha256与frame_revision，用于定位原页、题框和联系图。所有生成结果始终reviewed=false，不自动认定QA通过，也不继承其他智能体已审。review_dependency_unavailable表示当前执行环境无可用渲染依赖，复用已验证的现成Python或同SHA/frame_revision的现成图包，不自动安装；不能仅凭local_execution_failed错误名推断缺依赖或权限。当前智能体实际核对全部原页及题目内容，逐框联系图用于必要异常定位或用户选择的精修；来源、题框版本及 frames 均未变时复用本轮已生成图证，不继承其他智能体的审图结论；仅具体未决异常补定位图，一次汇总修改后核验受影响框及全页覆盖，无新异常不重复渲染、放大或裁剪。
 
-当前 Python 缺少 pymupdf/Pillow 时，审图执行按顺序尝试已有可执行的 `PAPERFLOW_PYTHON`、`VIRTUAL_ENV/bin/python`、任务 cwd 及其祖先目录中的 `.venv/bin/python` 或 `venv/bin/python`，本地 worker 上限120秒；不扫描全机、不安装依赖。单个解释器缺依赖不代表任务已有环境均不可用；这些路径均不可用时才按真实诊断保留缺口，不重复换读法。
+仅已选择本地review回退且当前Python缺少pymupdf/Pillow时，渲染按顺序尝试已有可执行的 `PAPERFLOW_PYTHON`、`VIRTUAL_ENV/bin/python`、任务 cwd 及其祖先目录中的 `.venv/bin/python` 或 `venv/bin/python`，本地 worker 上限120秒；不扫描全机、不安装依赖。单个解释器缺依赖不代表任务已有环境均不可用；这些路径均不可用时才按真实诊断保留缺口，不重复换读法。
 
-同一输出目录的图包缓存绑定 batch、原 PDF SHA、frame_revision、参考卷及其起始页、每份页数、frames 和渲染器版本。`review.json` 的 `render_key` 相同且图像及 index 文件的 `file_sha256` 全部校验通过时，返回 `cache_hit=true`、`decoded_pages=0`。题框或 revision 变化须重建叠框图；仅原 PDF、参考卷、页范围一致且原页文件哈希完好时复用原页解码，回执以 `raw_pages_reused` 表示。文件损坏则重建，不沿用旧图包。缓存与新生成产物均为 `reviewed=false`，不继承其他智能体的审图结论；当前智能体仍须实际核对原页、逐框联系图和全参考页覆盖。
+同一输出目录的图包缓存绑定 batch、原 PDF SHA、frame_revision、参考卷及其起始页、每份页数、frames 和渲染器版本。`review.json` 的 `render_key` 相同且图像及 index 文件的 `file_sha256` 全部校验通过时，返回 `cache_hit=true`、`decoded_pages=0`。题框或 revision 变化须重建叠框图；仅原 PDF、参考卷、页范围一致且原页文件哈希完好时复用原页解码，回执以 `raw_pages_reused` 表示。文件损坏则重建，不沿用旧图包。缓存与新生成产物均为 `reviewed=false`，不继承其他智能体的审图结论；当前智能体仍须实际核对全部原页、真实题目与全页覆盖，联系图按实质异常或用户精修范围使用。
 
 输入计划、全局 output、snapshot 输出和 checkpoint 使用不同文件路径；emit 派生的 engine/poll、review 的全部图像/index/JSON资产及 JSON 临时兄弟文件也不得覆盖本次 PDF、metadata、checkpoint、output 等输入输出。相同路径、相对/绝对等价路径及软硬链接碰撞返回 `file_path_conflict`；emit 在 checkpoint 写入前校验，冲突时不向冲突 output 写错误回执。合法的同图包缓存复用仍可使用，不为避冲突删除原件。
 
 备用 Python 审图保留 `source_pdf_hash_mismatch`、`reference_page_out_of_range`、`invalid_review_bbox`、`file_path_conflict` 的具体诊断，其余渲染失败概括为 `review_render_failed`；按实际错误处理，不将所有失败推断为依赖缺失。
 
-默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。general目录保留 `scope_query`；已按grade或subject_id过滤时，紧凑stdout以 `selected_grade`/`selected_subject_id` 和 `grades_count`/`subjects_count` 替代对应整列表，保留courses/classes。完整 `--output` 仍保留原列表和过滤参数，需要复核时读取该文件，不因stdout压缩重复查询。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。仅在 `analysis_status=awaiting_frames` 时，snapshot的 `precut_diagnosis` 保留预切失败页和简短问题；其他阶段为null。诊断与snapshot均不证明实际审阅。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
+默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。general目录保留 `scope_query`；已按grade或subject_id过滤时，紧凑stdout以 `selected_grade`/`selected_subject_id` 和 `grades_count`/`subjects_count` 替代对应整列表，保留courses/classes。完整 `--output` 仍保留原列表和过滤参数，需要复核时读取该文件，不因stdout压缩重复查询。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version及权威stem、standard_answer/来源、上下文、答题定义和组合结构；常规标准目录与独立结构核对优先用此投影，不默认下载完整学生analysis。复杂富文本/图像不完整时按题定点补权威内容和图证，投影不表示图文完整或已经审阅。read_version可作为review写计划expected.read_version，不能拼造版本。仅在 `analysis_status=awaiting_frames` 时，snapshot的 `precut_diagnosis` 保留预切失败页和简短问题；其他阶段为null。诊断与snapshot均不证明实际审阅。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
 
 `ok`/退出码只说明工具执行，业务完成看outcome、completion、remaining、顶层ready/submitted与真实全批覆盖，不只取原始preflight.ready。upload经FormData创建，scan/grading均由run按已选终点推进；只批改看grading_completed/grading_incomplete与原始全批覆盖，不要求ready；原生文件工具只向接口环境注入PDF，不默认点击上传表单。旧兼容入口的能力以自身help为准，不据此限制主入口的新命令。
 
@@ -171,9 +177,9 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 | `api-list [--operation <名称>]` | 离线列出受限registry的功能、路径、查询及必要字段，不访问业务服务 |
 | `api-call --operation <名称> [--plan <JSON>]` | 按已登记操作定点读写；GET不要求证据，写入要求真实证据/当前版本；禁止任意URL，special操作走专用命令 |
 | `sync --plan <JSON> --authorize-sync` | 仅用户本次已明确同步时提交或恢复原导入；开关不增加用户授权，默认检查命令绝不提交 |
-| `run [--stop-after grading或check] [--reference-paper <已审卷ID>] [--plan <JSON文件>] [--review-pdf <PDF> --review-out <DIR>] [--follow --max-seconds 600]` | 按老师选择的终点和真实阶段推进；waiting 可有界等待，审图、目录校对、失败或终点返回。成对 review 参数复用当前读取生成校对包 |
+| `run [--stop-after grading或frames或check] [--reference-paper <已审卷ID>] [--plan <JSON文件>] [--review-pdf <PDF> --review-out <DIR>] [--follow --max-seconds 600]` | 按老师选择的终点和真实阶段推进；waiting 可有界等待，审图、目录校对、失败或终点返回。成对review参数仅在有具体理由的本地回退中生成校对包，默认平台图/现有截图 |
 | `snapshot [--output <裸snapshot JSON>]` | 读批次/catalog，给源PDF SHA、read_version等版本、完整框与精简目录（正文、稳定选项ID、blank_ids、answers/extras）；reviewed=false不证明看过图 |
-| `review [--metadata <JSON>] --pdf <原PDF> --out <受控目录>` | 带 metadata 则复用已保存元数据离线渲染，不访问浏览器、不需会话；省略则从浏览器取 snapshot。核验 batch_id 和 PDF SHA，生成原页、按参考页每张最多6框/限高的上下文联系图、frame-index.json与review.json，需 pymupdf/Pillow；绑定来源与题框版本，始终reviewed=false |
+| `review [--metadata <JSON>] --pdf <原PDF> --out <受控目录>` | 仅具体理由下的可选本地回退；带metadata复用已保存元数据离线渲染，不访问浏览器、不需会话；省略则从浏览器取 snapshot。核验 batch_id 和 PDF SHA，生成原页、按参考页每张最多6框/限高的上下文联系图、frame-index.json与review.json，需 pymupdf/Pillow；绑定来源与题框版本，始终reviewed=false |
 | `frames --edits <JSON> [--pixel-review <本CLI生成的review.json>] [--confirm]` | 本地整包校验 set/shift/split/promote_children，最多一次 PATCH，再按需确认；预切正常、题框非空且实际已审无修改时可 operations=[]，零 PATCH；失败/空框不能批准。保存与确认不是跨请求事务 |
 | `catalog --plan <JSON>` | 确认已审目录及本批处理范围，回读真实完整 questions，agent 不必复制富题对象；不修改目录，不提交课堂。run 根 plan.catalog 同效 |
 | `associate --plan <JSON>` | 整批证据/版本校验后顺序关联、采用新 roster revision，末尾回读；最多50项，可能部分保存，不是原子事务 |
@@ -237,7 +243,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 | `needs_reference` | 按真实清晰度、完整性与教师批注实际审阅并选本批参考卷，直接 run --reference-paper <卷ID> --follow；无须单字段plan。若全批已有完整已知verdict，候选按现成正确率排序；否则仍取前几份轻量比较，不增加识别调用。candidates含id/index/pdf_pages/原图URL，correct_rate仅在有真实统计时使用，范围0–1，不把缺失当零或凭空编百分比；候选摘要不是处理范围 |
 | `needs_file_binding`、`upload_uncertain` | 前者只补原生文件绑定后执行既有脚本；后者查原key状态并保留upload_receipt，不改文件/参数或盲重传 |
 | `needs_grading_recovery`、`needs_analysis_recovery` | 按真实failed/诊断定位原批改或后续整理缺口，分别采用适用的定点恢复计划，不切模式、重跑done或把部分范围当完成 |
-| `needs_precut_recovery` | run同时携带 `review` snapshot，优先复用它；有本地原PDF时可配对传 `--review-pdf`/`--review-out` 生成图包，无须为渲染另拉snapshot。snapshot和生成图包仍不算实际审阅。读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
+| `needs_precut_recovery` | run同时携带 `review` snapshot，优先复用它；先用现有平台原页/截图核验；仅明确本地回退理由且已有原PDF时才配对传 `--review-pdf`/`--review-out` 生成图包，无须为渲染另拉snapshot。snapshot和生成图包仍不算实际审阅。读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
 | `needs_frame_review` | 复用 run 生成的 review 包，实际核对全部参考页，一次整理必要框修改，再应用并确认。没有包且已有本地原 PDF 时才单独 review，已有元数据优先 --metadata 离线复用；已有链接无本地 PDF 时按原技能读取参考页，不索要或重传原卷 |
 | `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先集中修改并用 catalog-save-draft/catalog-save-review 保存一次，回读新版本与实际任务状态，历史 ready 作废；实际审完后用catalog --plan确认，再run |
 | `needs_targeted_recovery`、partial/failed 或检查阻塞 | run 的 partial/failed 回执直接复用已读状态，附 student_state_counts、failed_papers（paper_id/index/pdf_pages、最多3条且每条最多500字的 issues、incomplete_pages）及可得 analysis_error，不含答案、无自动重试，retry_authorized=false；仅失败卷缺少原因且仍有本轮预算时补一次 analysis?view=summary GET，read_version 非空且相同才合并原因。已有原因不补查；版本变动或缺失不混合，补查失败或预算尽仍保留原定位，读 failure_details_status 与可得 failure_details_error 判断详情缺口。先用该定位，已有信息足够时不重复 snapshot/summary/diagnose；摘要不足才定点补证。诊断不解决服务器失败，也不授权绕过同请求传输上限。再读必要 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |
@@ -260,7 +266,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --check
 
 复杂计划仍用 `--plan <JSON文件路径>`，不传 inline JSON；路径不存在返回 `plan_file_not_found`。run 计划根可传 `reference_student_id` 与 `scope`。scope 含实时 revision、semester_id、class_ids、scope 对象、`evidence_confirmed=true` 和非空 evidence_note，仅写已核实的课程/班级与本次授权范围。工具核对当前集合，相同可复用，不同才按当前 roster revision 更新；服务端仍负责权限校验。已有参考不为追求更高正确率重开全批，无证据不造百分比。
 
-**题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。第一次保存前集中逐页逐框审清完整题干、全部选项、分数上下界、公共说明、作答空间与批注归属，不以统一 padding 代替边界判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
+**题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。先按全部原页核清实际题目、必要上下文及批注归属，集中修复漏题、合题、关键截断或串题；正常区域不逐框放大调边界，只有用户选择精修才逐题细调，不以统一padding代替判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
 
 像素计划使用 `frames --edits <计划> --pixel-review <本CLI生成的review.json>`，计划必须声明 `coordinate_space:"pixels"`，region 的 page 仍为 0-based 相对页，bbox 为原始 PNG 像素 `[left,top,right,bottom]`；CLI核对同batch/source_pdf_sha256/frame_revision/reference_student_id及review.json记录的配对raw-page-N.png SHA，按PNG实际IHDR宽高转换为0..1。支持set/split/promote_children/replace_page的regions，promote_children与split均只转换显式children[].regions，不改变子ID、数量或层级，不自动生成子框；仍拒绝shift。不缩放、裁切、夹紧、识别题或自动padding/审阅。仍须实际严格审图并遵守全部本地及服务端保护；review与原图受防覆盖保护。普通归一化计划用法不变。
 
@@ -277,13 +283,15 @@ operations 支持：
 operation = {"type": "replace_page", "page": 0, "frames": reviewed_page_0_frames}
 ```
 
-将此项放入上述完整计划后执行 `frames --edits <补页计划.json>`；实际审阅已覆盖全部参考页且确认无误时才可加 `--confirm`。保存仍核对当前revision、来源、参考卷及全页审阅契约，操作回执防止重复写入；新框标签进入后续独立业务题粒度核对。成功后简单回读真实框与状态，不重复提交同一几何数据或重新预切。
+将此项放入上述完整计划后执行 `frames --edits <补页计划.json>`；实际审阅已覆盖全部参考页且确认无误时才可加 `--confirm`。保存仍核对当前revision、来源、参考卷及全页审阅契约，操作回执防止重复写入；新框标签进入后续独立业务题粒度核对。保存回执带当前review元数据，优先复用它核验受影响框与全页覆盖，无须仅为渲染另读snapshot；不重复提交同一几何数据或重新预切。
 
-`frames --confirm` 或 run 计划根的 frames 使用同一计划。run 根还可有 scope、associations、expected_leaf_labels、reference_reviewed。当前部分服务在 frames 确认后以 `catalog_confirmation.kind=confirmed_frames` 自动确认目录并启动全批，不存在可保证的目录先审中间门；去掉 follow 或虚构 stop-after catalog 不能暂停服务端。仅服务端实际返回 awaiting_confirmation 时才走 needs_catalog_review 与 catalog 确认。目录保存可能触发全批重新处理，须读取真实状态并重新全批 check，不沿用历史 ready、不声称仅重算修改题。
+`frames --confirm` 或 run 计划根的 frames 使用同一计划；frames终点不得confirm。run 根还可有 scope、associations、expected_leaf_labels、reference_reviewed。当前部分服务在 frames 确认后以 `catalog_confirmation.kind=confirmed_frames` 自动确认目录并启动全批，不存在可保证的目录先审中间门；去掉 follow 或虚构 stop-after catalog 不能暂停服务端。仅服务端实际返回 awaiting_confirmation 时才走 needs_catalog_review 与 catalog 确认。目录保存可能触发全批重新处理，须读取真实状态并重新全批 check，不沿用历史 ready、不声称仅重算修改题。
 
 **独立计算题。** N个独立算式最终必须是N道可分别查看/订正的业务叶题，不是N框仍一题、N个空或组合题。填写真实expected_leaf_labels，CLI保存并续验粒度目标；核对叶题标签/数量、parent_id=null，排除content.children、composite/virtual_parent、is_composite/isComposite、business_question.isComposite及题型目录isComposite所代表的合题，且无额外父标题题。expected_granularity_verified只是程序核对，不能替代实际目录与必要图证核验。
 
-**关联。** 计划为 `{revision:实时roster版本,assignments:[{paper_id,student_id,evidence_confirmed:true,evidence_note:必要证据摘要}]}`。解除有证据确认的错误关联时用 `associate` 显式传 `student_id:null`，可同包解除多份，无须改走api-call；每项仍须证据、当前revision、既有guard校验及持久化回读，不因null绕过保护。初次常规查看已有清楚卷面与名单证据的整包应用，脚本中的 true 不是证据。第一次常规查看已模糊或未识别者直接暂留，不放大、新增 OCR、换识别方式或凭剩余名单试探；用户提供新证据或本次明确要求重新识别时，按其范围重新判断，仍不猜人。`roster` 的 exact_name_candidates 只是已有识别名的同名列表，不构成身份确认。继续不依赖该身份的允许步骤，run 在 completed 阶段才应用 associations，其他真实阶段按原技能处理，不能改 scope 求通过。
+仅当教师本次明确同意编号例外时，姓名空白或不可辨者可凭首次常规查看已清楚观察到的班级与班内序号核验：本批班级/学期已可靠确认，当前真实授权名单同班number唯一精确匹配，且无清楚姓名或其他身份冲突，才按逐项证据、当前revision与持久化回读规则关联。number是班内序号，不是完整student_no；不猜数字、不用剩余名单或默认值、不新增OCR，也不为取得编号补看、放大或换方式识别模糊区域。不满足仍未关联，不清理他人关联求通过。未明确同意时仍按原姓名规则，需要时集中征询；同一批已明确授权不重复问。
+
+**关联。** 计划为 `{revision:实时roster版本,assignments:[{paper_id,student_id,evidence_confirmed:true,evidence_note:必要证据摘要}]}`。解除有证据确认的错误关联时用 `associate` 显式传 `student_id:null`，可同包解除多份，无须改走api-call；每项仍须证据、当前revision、既有guard校验及持久化回读，不因null绕过保护。初次常规查看已有清楚卷面与名单证据的整包应用，脚本中的 true 不是证据。未获上述编号例外明确授权或不满足其条件时，第一次常规查看已模糊或未识别者直接暂留，不放大、新增 OCR、换识别方式或凭剩余名单试探；用户提供新证据或本次明确要求重新识别时，按其范围重新判断，仍不猜人。`roster` 的 exact_name_candidates 只是已有识别名的同名列表，不构成身份确认。继续不依赖该身份的允许步骤，run 在 completed 阶段才应用 associations，其他真实阶段按原技能处理，不能改 scope 求通过。
 
 ## 目录确认计划
 

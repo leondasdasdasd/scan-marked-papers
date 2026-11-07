@@ -126,7 +126,7 @@ def request_payload(args,action,plan=None,checkpoint=None):
              'interval':args.interval,'observe_analysis':getattr(args,'observe_analysis',False),'checkpoint':checkpoint,'plan':plan,'confirm':getattr(args,'confirm',False),'authorize_sync':getattr(args,'authorize_sync',False)}
     if action=='run':
         stop_after=getattr(args,'stop_after',None) or checkpoint.get('stop_after','check')
-        if stop_after not in ('grading','check'):raise ValueError('invalid_stop_after')
+        if stop_after not in ('grading','frames','check'):raise ValueError('invalid_stop_after')
         payload['stop_after']=stop_after
         checkpoint={**checkpoint,'origin':args.base_url,'batch_id':args.batch_id,'stop_after':stop_after}
         payload['checkpoint']=checkpoint
@@ -398,7 +398,7 @@ def main():
     p.add_argument('--read-timeout',type=float,default=10)
     p.add_argument('--scope-plan',type=Path);p.add_argument('--file-input-selector',default='#paperflow-upload')
     p=sub.add_parser('run');p.add_argument('--plan',type=Path)
-    p.add_argument('--stop-after',choices=('grading','check'))
+    p.add_argument('--stop-after',choices=('grading','frames','check'))
     p.add_argument('--reference-paper',help='ID of the actually reviewed reference paper; avoids a one-field plan file')
     p.add_argument('--review-pdf',type=Path);p.add_argument('--review-out',type=Path)
     p.add_argument('--follow',action='store_true');p.add_argument('--max-seconds',type=int,default=600)

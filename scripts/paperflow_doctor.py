@@ -54,7 +54,9 @@ print(json.dumps(result))
         except (OSError,ValueError):attempt['error']='runtime_check_failed'
         attempts.append(attempt)
         if renderer_python:break
-    return {'ok':renderer_python is not None,'parser_python':parser_python,'renderer_python':renderer_python,
+    return {'ok':True,'interpreter':sys.executable,
+        'parser_available':parser_python is not None,'renderer_available':renderer_python is not None,
+        'parser_python':parser_python,'renderer_python':renderer_python,
         'attempts':attempts,'wall_seconds':round(time.monotonic()-started,3)}
 
 
