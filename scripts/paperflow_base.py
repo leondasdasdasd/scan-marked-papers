@@ -49,7 +49,8 @@ JS = r"""async (input) => {
     const expected=new Set(batch.students.map(s=>s.id));
     batchPaperIds=[...expected];
     const seen=new Set(),duplicates=[],counts={};
-    let answers=0,missing=0,duplicate_answers=0,unexpected_answers=0;
+    let answers=0,duplicate_answers=0,unexpected_answers=0;
+    const expectedPairs=new Set();
     const ids=new Set(leaves.map(q=>q.id));
     for(const s of a.students||[]) {
       if(seen.has(s.id)) duplicates.push(s.id);
@@ -60,9 +61,16 @@ JS = r"""async (input) => {
         if(!ids.has(id)) {unexpected_answers++;continue;}
         if(qids.has(id)) duplicate_answers++;
         qids.add(id);answers++;
+        if(expected.has(s.id))expectedPairs.add(JSON.stringify([s.id,id]));
         const verdict=answer.verdict||'unknown';counts[verdict]=(counts[verdict]||0)+1;
       }
-      missing+=leaves.length-qids.size;
+    }
+    const expectedAnswers=leaves.length?expected.size*leaves.length:null;
+    const missing=expectedAnswers===null?null:expectedAnswers-expectedPairs.size;
+    const studentStateCounts={},failedAnalysisPapers=[];
+    for(const paperId of expected){
+      const state=a.scan_student_states?.[paperId]||'unknown';studentStateCounts[state]=(studentStateCounts[state]||0)+1;
+      if(state==='failed')failedAnalysisPapers.push(paperId);
     }
     const unlinked=(roster.papers||[]).filter(p=>!p.student_id).map(p=>({paper_id:p.id,index:p.index,
       pdf_pages:[Number(p.start)+1,Number(p.start)+Number(batch.pages_per_paper)],status:p.status}));
@@ -74,7 +82,9 @@ JS = r"""async (input) => {
       expected.size>0&&rosterCoverage&&leaves.length>0&&!missing_papers.length&&
       !unexpected_papers.length&&!duplicates.length&&!missing&&!duplicate_answers&&!unexpected_answers;
     return {batch_id:batch.id,workflow_mode:batch.workflow_mode,analysis_status:a.status,stale:!!a.stale,
-      papers:expected.size,covered_papers:seen.size,leaf_questions:leaves.length,answers,verdicts:counts,
+      papers:expected.size,covered_papers:[...expected].filter(id=>seen.has(id)).length,leaf_questions:leaves.length,
+      expected_answers:expectedAnswers,answers,verdicts:counts,student_state_counts:studentStateCounts,
+      failed_analysis_papers:failedAnalysisPapers,
       missing_answers:missing,duplicate_answers,unexpected_answers,missing_papers,unexpected_papers,
       duplicate_papers:duplicates,unlinked,roster_coverage_complete:rosterCoverage,structure_complete:complete,
       visual_review_performed:false,full_accuracy_verified:false,
@@ -122,6 +132,8 @@ JS = r"""async (input) => {
         check.status==='awaiting_confirmation'&&summary.structure_complete&&!summary.unlinked.length&&
         !(check.issues||[]).some(i=>['pending','blocker','failure'].includes(i.severity));
       const remaining=[];
+      if(summary.analysis_status!=='completed'||summary.stale)remaining.push({code:'ANALYSIS_INCOMPLETE',analysis_status:summary.analysis_status});
+      if(summary.failed_analysis_papers.length)remaining.push({code:'ANALYSIS_FAILED_PAPERS',count:summary.failed_analysis_papers.length});
       if(summary.unlinked.length)remaining.push({code:'IDENTITY_PENDING',count:summary.unlinked.length});
       if(!summary.structure_complete)remaining.push({code:'STRUCTURE_INCOMPLETE'});
       if(!scopeComplete)remaining.push({code:'SCOPE_INCOMPLETE'});

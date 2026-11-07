@@ -461,7 +461,7 @@ async (input) => {
   const workflow=workflowFactory({input,api,fail,full,selectScope,inspectOrCheck,control,transitions,
     getUpload:()=>uploadReceipt,setUpload:r=>uploadReceipt=r});
   const analysisRunning=status=>['generating','catalog_confirmed','frames_confirmed','processing'].includes(status);
-  function recoverySummary(a,batch){
+  async function recoverySummary(a,batch){
     const states=a.scan_student_states||{},counts={},failed=[];
     for(const paper of batch.students||[]){
       const state=states[paper.id]||'unknown';counts[state]=(counts[state]||0)+1;
@@ -471,7 +471,25 @@ async (input) => {
         issues:(result?.issues||[]).filter(x=>typeof x==='string').slice(0,3).map(x=>x.slice(0,500)),
         incomplete_pages:result?.incomplete_pages??null});
     }
-    return {student_state_counts:counts,failed_papers:failed,
+    let detailsStatus=failed.length?'available':'not_applicable',detailsError;
+    const missingDetails=failed.some(p=>!p.issues.length);
+    if(missingDetails&&performance.now()>=executionDeadline)detailsStatus='budget_exhausted';
+    else if(missingDetails){
+      try{
+        const summary=await api('GET',B+'/analysis?view=summary');
+        if(typeof a.read_version==='string'&&a.read_version&&summary.read_version===a.read_version){
+          for(const paper of failed){
+            const result=(summary.students||[]).find(s=>s.id===paper.paper_id);
+            if(result){paper.issues=(result.issues||[]).filter(x=>typeof x==='string').slice(0,3).map(x=>x.slice(0,500));
+              paper.incomplete_pages=result.incomplete_pages??paper.incomplete_pages;}
+          }
+          detailsStatus=failed.some(p=>!p.issues.length)?'incomplete':'available';
+        }else detailsStatus='source_changed_or_unversioned';
+      }catch(e){detailsStatus='unavailable';detailsError={code:e.code||'api_failed',status:e.details?.status??null,
+        next_action:e.details?.next_action||'read_state_before_retry'};}
+    }
+    return {student_state_counts:counts,failed_papers:failed,read_version:a.read_version,failure_details_status:detailsStatus,
+      ...(detailsError?{failure_details_error:detailsError}:{}),
       ...(a.error||a.catalog_error?{analysis_error:String(a.error||a.catalog_error).slice(0,500)}:{}),
       retry_authorized:false,next_action:'inspect_failed_papers_before_retry'};
   }
@@ -571,7 +589,7 @@ async (input) => {
         return {...check,...(check.waiting_for_media?{outcome:'waiting',waiting_for:'media',analysis_status:a.status}:{}),visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
           expected_granularity_verified:!!expected,review_tasks:reviewTasks(check,a,batch),submitted:false};
       }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,
-        ...(['partial','failed'].includes(a.status)?recoverySummary(a,batch):{}),submitted:false};
+        ...(['partial','failed'].includes(a.status)?await recoverySummary(a,batch):{}),submitted:false};
       const key=JSON.stringify([a.status,a.frame_revision,a.catalog_revision]);
       if(visited.has(key))return {outcome:'no_progress',analysis_status:a.status,submitted:false};
       visited.add(key);

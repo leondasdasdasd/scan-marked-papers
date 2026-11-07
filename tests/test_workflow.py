@@ -551,6 +551,48 @@ test('partial analysis returns source failure locations without answers or retry
  assert.equal(d.result.retry_authorized,false);assert(!JSON.stringify(d.result).includes('private answer'));
  assert(w.trace.every(([method])=>method==='GET'));
 });
+test('missing failure details use one version-matched summary read and reject changed-source details',async()=>{
+ for(const matched of [true,false]){
+  const w=world();w.a.status='partial';w.a.read_version='v1';w.a.scan_student_states={p1:'done',p2:'failed'};
+  const originalFetch=global.fetch;let summaries=0;
+  global.fetch=async(path,o)=>{
+   if(path===B+'/analysis?view=summary'){summaries++;w.trace.push([o.method,path]);return reply({read_version:matched?'v1':'v2',
+    students:[{id:'p2',issues:['source failure cause'],incomplete_pages:1}]});}
+   return originalFetch(path,o);
+  };
+  const d=await main(input('run'));assert(d.ok);assert.equal(summaries,1);
+  assert.equal(d.result.failure_details_status,matched?'available':'source_changed_or_unversioned');
+  assert.deepEqual(d.result.failed_papers[0].issues,matched?['source failure cause']:[]);
+  assert.equal(d.result.retry_authorized,false);assert(w.trace.every(([method])=>method==='GET'));
+ }
+ const exhausted=world();exhausted.a.status='partial';exhausted.a.scan_student_states={p2:'failed'};
+ const budget=await main(input('run',{timeout:0}));assert.equal(budget.result.failure_details_status,'budget_exhausted');
+ assert(!exhausted.trace.some(([,path])=>path===B+'/analysis?view=summary'));
+ const unavailable=world();unavailable.a.status='partial';unavailable.a.scan_student_states={p2:'failed'};
+ const previousFetch=global.fetch;
+ global.fetch=async(path,o)=>path===B+'/analysis?view=summary'?reply({detail:'unavailable'},503):previousFetch(path,o);
+ const missing=await main(input('run'));assert(missing.ok);assert.equal(missing.result.outcome,'needs_targeted_recovery');
+ assert.equal(missing.result.failure_details_status,'unavailable');assert.equal(missing.result.failed_papers[0].paper_id,'p2');
+ assert.equal(missing.result.retry_authorized,false);
+});
+test('whole-batch missing counts include absent papers and stay unknown before a catalog exists',async()=>{
+ const w=world();w.finish();w.a.students=w.a.students.slice(0,1);
+ const absent=await main(input('inspect'));assert(absent.ok);assert.equal(absent.result.expected_answers,4);
+ assert.equal(absent.result.answers,2);assert.equal(absent.result.missing_answers,2);
+ w.a.students.push(clone(w.a.students[0]));
+ const duplicate=await main(input('inspect'));assert.equal(duplicate.result.missing_answers,2);assert.equal(duplicate.result.duplicate_papers.length,1);
+ w.a.students[1].id='outside';
+ const outside=await main(input('inspect'));assert.equal(outside.result.covered_papers,1);assert.equal(outside.result.missing_answers,2);
+ const pending=world();pending.a.status='generating';
+ const unknown=await main(input('inspect'));assert.equal(unknown.result.expected_answers,null);assert.equal(unknown.result.missing_answers,null);
+});
+test('check keeps analysis failures visible alongside identity and coverage blockers',async()=>{
+ const w=world();w.finish();w.a.status='partial';w.a.scan_student_states={p1:'done',p2:'failed'};w.roster.papers[0].student_id=null;
+ const d=await main(input('check'));assert(d.ok);assert.equal(d.result.ready,false);
+ const codes=d.result.remaining.map(x=>x.code);
+ assert(codes.includes('ANALYSIS_INCOMPLETE'));assert(codes.includes('ANALYSIS_FAILED_PAPERS'));assert(codes.includes('IDENTITY_PENDING'));
+ assert.deepEqual(d.result.student_state_counts,{done:1,failed:1});assert.deepEqual(d.result.failed_analysis_papers,['p2']);
+});
 
 (async()=>{let failed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+' '+e.message);}}console.log(JSON.stringify({tests:tests.length,passed:tests.length-failed,failed}));process.exitCode=failed?1:0;})();
 '''
