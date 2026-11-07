@@ -176,8 +176,8 @@ JS = r"""async (input) => {
       }
       result={...summary,scope_complete:scopeComplete,check_coverage_matches:coverageMatches,
         ...(input.skip_unlinked===true?{eligible_check:{ready:ready||eligibleReady,
-          coverage_verified:coverageMatches||eligibleCoverage(check),papers:eligibleIds.length,
-          expected_answers:eligibleIds.length*summary.leaf_questions,
+          coverage_verified:summary.structure_complete&&(coverageMatches||eligibleCoverage(check)),papers:eligibleIds.length,
+          expected_answers:summary.leaf_questions?eligibleIds.length*summary.leaf_questions:null,
           skipped:summary.unlinked.map(p=>({...p,reason:'identity_unconfirmed'})),
           full_batch_ready:ready,scope_persisted:false}}:{}),
         completion:{analysis_completed:summary.analysis_status==='completed'&&!summary.stale,

@@ -844,6 +844,9 @@ test('whole-batch missing counts include absent papers and stay unknown before a
  const outside=await main(input('inspect'));assert.equal(outside.result.covered_papers,1);assert.equal(outside.result.missing_answers,2);
  const pending=world();pending.a.status='generating';
  const unknown=await main(input('inspect'));assert.equal(unknown.result.expected_answers,null);assert.equal(unknown.result.missing_answers,null);
+ const check=await main(input('check',{skip_unlinked:true}));assert(check.ok);
+ assert.equal(check.result.eligible_check.expected_answers,null);assert.equal(check.result.eligible_check.ready,false);
+ assert.equal(check.result.eligible_check.coverage_verified,false);
 });
 test('check keeps analysis failures visible alongside identity and coverage blockers',async()=>{
  const w=world();w.finish();w.a.status='partial';w.a.scan_student_states={p1:'done',p2:'failed'};w.roster.papers[0].student_id=null;
