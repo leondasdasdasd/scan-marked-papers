@@ -59,7 +59,7 @@ artifact项是文件/图片入口，按真实工具取必要图证或下载；�
 | `analysis-version` | `GET B/analysis/version` | 轻量读取分析版本，判断是否需要刷新内容。 | 版本未变不反复读取完整snapshot。 |
 | `analysis-status` | `GET B/analysis/status` | 轻量读取分析阶段、任务和学生处理状态。 | 正常running进度暂不变按预算等，不据此判失败。 |
 | `analysis-student` | `GET B/analysis/students/{sid}` | 按学生读取整理结果与作答，不拉全批答案。 | sid为本批学生卷ID，不是课堂学生ID。 |
-| `analysis-start` | `POST B/analysis` | 对scan或供应商批改选择参考卷并启动统一整理。 | body必填：`reference_student_id`。 仅organizer：scan或已完成全批供应商批改；沿用既有参考卷，LLM不走此入口。 |
+| `analysis-start` | `POST B/analysis` | 对scan或供应商批改选择参考卷并启动统一整理；不是通用resume入口，恢复须先核实当前阶段及本次授权。 | body必填：`reference_student_id`。 仅organizer：scan或已完成全批供应商批改；沿用既有参考卷，LLM不走此入口。 |
 | `reference-answers-resume` | `POST B/analysis` | 按真实恢复阶段接续已整理记录的参考答案补齐。 | body必填：`resume_reference_answers`。 resume_reference_answers=true；仅真实参考答案恢复阶段，不是通用resume。 |
 | `prepare-analysis` | `POST L/prepare-analysis` | 按当前配置准备LLM批改后的分析，并复用有效快照。 | 无body；LLM整理入口，不传reference_student_id；会按关联/配置筛选，须另验全批覆盖。 |
 | `analysis-retry-incomplete` | `POST B/analysis/retry-incomplete` | 仅重试非scan整理中页面失败的学生，保留成功页面。 | 无body；非scan、completed/partial且非stale，须有page_errors；不是原始批改重试。 |

@@ -132,6 +132,8 @@ collect不访问浏览器、不重新执行或再次验证业务，校验布尔o
 
 emit即使带--follow也只运行一轮timeout预算，不持续后台跟进；waiting先collect再生成下一轮，不重复启动。各轮沿用该阶段本轮墙钟累计预算（默认600秒，可按用户明确需要调整），不每轮重置；这不是CLI emit已实现的全局预算。正常running且进度暂不变本身不是失败证据，沿预算等待，只有明确重复错误或不可恢复诊断才提前停止。到限交付“处理中/检查未完成”、进度、链接与原checkpoint，下次续原batch，不无限轮询、重传或假报ready，不按固定轮数判失败。
 
+分析启动请求返回HTTP200后，紧接读取仍为not_generated可能是启动窗口，不代表阶段未知或处理成功。transition记录analysis_start_requested及受限response_status；返回waiting/waiting_for=analysis_start时，run --follow沿原预算只观察analysis/status，初始化期间不重发启动。预算耗尽正常交回处理中与恢复点，失败不当成功。跨命令恢复仍核当前真实状态，不把本轮观察保护称exactly-once或永久请求账本。
+
 正常 `run --follow` 跨 waiting 续接时，若上轮已明确分析活跃，内部观察保留 imports/task control 检查，稳定阶段省去重复 batch/catalog 读取；阶段变化后再次检查 control 并作权威读取才继续。此优化不新增 CLI 开关，不改变写前保护或 emit 跨轮管理。状态与进度相同时，等待间隔以1.5倍退避，上限为 `min(3*interval,15秒)`；进度变化回到 interval，睡眠不越过单轮 deadline。分析与媒体共享执行 deadline；Python follow 每轮 timeout 仅取剩余 max-seconds。分析观察器仅对本批 `GET /api/batches/<batch_id>/analysis/status` 返回503且原文为“分析状态正在更新，请稍后重试”时，在原 deadline 内有界等待并最多额外读取2次；成功读取后清零连续失败计数。耗尽次数或预算时保留 `analysis_status_updating` 诊断；其他503、写请求及模型传输不因此自动重试。业务 HTTP 在途仍可能使实际墙钟超过预算，这些预算不是硬超时或服务端完成承诺，减少轮询也不证明真实处理更快。
 
 复用snapshot及run回执review中已有的reference_pages：每项为{page:参考卷0-based页,url:同源原页URL}，不含pdf_page；定位不渲染、不证明已审，合法参考信息缺失时不猜链接。优先复用reference_pages、needs_reference候选pages及已有evidence题图定位，通过宿主实际读图或现有截图核验，URL本身不是审图回执。
@@ -264,7 +266,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --checkpoint <本轮上传cp.json> --browser-session <本轮任务名> --playwright-cli <现有JS入口> run --reference-paper <已审阅卷ID> --follow --stop-after check
 ```
 
-复杂计划仍用 `--plan <JSON文件路径>`，不传 inline JSON；路径不存在返回 `plan_file_not_found`。run 计划根可传 `reference_student_id` 与 `scope`。scope 含实时 revision、semester_id、class_ids、scope 对象、`evidence_confirmed=true` 和非空 evidence_note，仅写已核实的课程/班级与本次授权范围。工具核对当前集合，相同可复用，不同才按当前 roster revision 更新；服务端仍负责权限校验。已有参考不为追求更高正确率重开全批，无证据不造百分比。
+复杂计划仍用 `--plan <JSON文件路径>`，不传 inline JSON；路径不存在返回 `plan_file_not_found`。run 计划根可传 `reference_student_id` 与 `scope`。scope 含实时 revision、semester_id、class_ids、scope 对象、`evidence_confirmed=true` 和非空 evidence_note，仅写已核实的课程/班级与本次授权范围。工具核对当前集合，相同可复用，不同才按当前 roster revision 更新；服务端仍负责权限校验。已有参考不为追求更高正确率重开全批，无证据不造百分比。服务端batch.scan_reference_student_id仍属于本批时可沿用，不重复要求选参考；仍须实际审阅该参考原页，不能把ID存在当审图完成。
 
 **题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。先按全部原页核清实际题目、必要上下文及批注归属，集中修复漏题、合题、关键截断或串题；正常区域不逐框放大调边界，只有用户选择精修才逐题细调，不以统一padding代替判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
 
@@ -352,6 +354,10 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 确切课堂失效诊断的 next_action 为 `check_access_then_relogin`。`relogin` 使用既有 `POST /api/login?force=true&return_to=<本批次路径>`，login_url 仅在浏览器内存保留并延迟导航，不进入输出、checkpoint 或日志；使用独立会话时恢复导航也只在该上下文执行，不去老师的源页面操作。emit 生成不导航，evaluate 执行后才导航。`authentication_navigation_started` 仅表示导航启动；`authentication_navigation_deferred` 表示页面有弹窗或焦点编辑，先保留用户未保存草稿；`authentication_recovery_pending` 表示已启动恢复，不再重复登录。回到原 origin 后用 access 验证同一教师、学校及有效课堂会话，再只读当前业务状态后续做；不自动重放写请求。一次恢复仍无效就保留原 batch 与阻塞，不翻源码、猜刷新入口或循环重登，也不据此断言配置故障。
 
 ## 恢复与终点
+
+snapshot及partial/failed回执的recovery优先复用当前已读权威分析状态投影：error_code、recovery_action、retryable、server_resume_authorized，无额外GET。server_resume_authorized只是服务器状态提示，不是用户许可，retry_authorized仍为false；不得见新字段就自动恢复。resume_with_session对应next_action=verify_current_session_and_authorized_resume：先access核对当前同一教师/学校，再按本次真实授权与当前阶段接续；access有效不证明AI绑定已恢复，不因此反复登录。同因有限恢复仍失败时保留已有完成卷、原batch及错误后停止，不将HTTP200当成功。其他情况沿inspect_failed_papers_before_retry定位。
+
+现有api-list已登记analysis-start（POST同batch/analysis），必须传本批真实reference_student_id；缺口是恢复提示与入口用途的可发现性，不是传输路由缺失，也不表示完全没有CLI路径。它不是通用resume别名。只有已核实当前阶段契约及恢复授权时才复用原参考、沿现有受限操作接续；实际不兼容才定点页面，不猜body或新增别名。页面请求body未取到就是未知，不能据页面请求HTTP200或短暂继续处理声称CLI线上恢复已通过。
 
 先核对本次选择的stop_after；只批改终点不因批改完成自动扩展到analysis/check。恢复沿用同一材料已确认的终点，用户明确变更才更新；未知业务终点先补问，不能把旧checkpoint兼容默认check当成本次授权。
 

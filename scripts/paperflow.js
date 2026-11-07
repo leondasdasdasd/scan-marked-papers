@@ -69,6 +69,7 @@ async (input) => {
     return {batch_id:batch.id,workflow_mode:batch.workflow_mode,pages_per_paper:batch.pages_per_paper,
       total_pages:batch.total_pages,analysis_status:a.status,read_version:a.read_version,frame_revision:a.frame_revision,
       catalog_revision:a.catalog_revision,analysis_confirmation_version:batch.analysis_confirmation_version||a.analysis_confirmation_version,
+      recovery:recoveryHints(a),
       source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
       reference_preparation:a.reference_preparation?Object.fromEntries(Object.entries(a.reference_preparation)
         .filter(([key])=>['status','remaining','issues','error_code','recovery_action','retryable'].includes(key))):null,
@@ -474,6 +475,12 @@ async (input) => {
   const workflow=workflowFactory({input,api,fail,full,selectScope,inspectOrCheck,control,transitions,
     getUpload:()=>uploadReceipt,setUpload:r=>uploadReceipt=r});
   const analysisRunning=status=>['generating','catalog_confirmed','frames_confirmed','processing'].includes(status);
+  function recoveryHints(a){
+    return {error_code:typeof a.error_code==='string'?a.error_code.slice(0,100):null,
+      recovery_action:typeof a.recovery_action==='string'?a.recovery_action.slice(0,100):null,
+      retryable:typeof a.retryable==='boolean'?a.retryable:null,
+      server_resume_authorized:typeof a.resume_authorized==='boolean'?a.resume_authorized:null};
+  }
   async function recoverySummary(a,batch){
     const states=a.scan_student_states||{},counts={},failed=[];
     for(const paper of batch.students||[]){
@@ -502,9 +509,11 @@ async (input) => {
         next_action:e.details?.next_action||'read_state_before_retry'};}
     }
     return {student_state_counts:counts,failed_papers:failed,read_version:a.read_version,failure_details_status:detailsStatus,
+      recovery:recoveryHints(a),
       ...(detailsError?{failure_details_error:detailsError}:{}),
       ...(a.error||a.catalog_error?{analysis_error:String(a.error||a.catalog_error).slice(0,500)}:{}),
-      retry_authorized:false,next_action:'inspect_failed_papers_before_retry'};
+      retry_authorized:false,next_action:a.recovery_action==='resume_with_session'?
+        'verify_current_session_and_authorized_resume':'inspect_failed_papers_before_retry'};
   }
   async function observeAnalysis(deadline){
     let previous=null,delay=input.interval*1000,updatingReads=0;
@@ -538,6 +547,8 @@ async (input) => {
     if(input.observe_analysis){
       const observed=await observeAnalysis(executionDeadline);
       if(observed.stale)return {outcome:'source_stale',submitted:false};
+      if(observed.status==='not_generated')return {outcome:'waiting',waiting_for:'analysis_start',
+        analysis_status:observed.status,submitted:false};
       if(analysisRunning(observed.status))return {outcome:'waiting',waiting_for:'analysis',analysis_status:observed.status,progress:observed.progress,submitted:false};
       // Re-enter through current guards and authoritative state before any write.
       const changed=await control();if(changed)return changed;
@@ -563,7 +574,7 @@ async (input) => {
     if(!workflow.organizer(batch)&&(!a.status||a.status==='not_generated'))return {outcome:'needs_analysis_recovery',submitted:false};
     if(a.stale)return {outcome:'source_stale',submitted:false};
     if(!a.status||a.status==='not_generated'){
-      const reference=input.plan?.reference_student_id;
+      const reference=input.plan?.reference_student_id||batch.scan_reference_student_id;
       if(!batch.students.some(s=>s.id===reference)){
         const rate=s=>{const rows=s.judgments?.length?s.judgments:s.results;
           return Array.isArray(rows)&&rows.length&&rows.every(r=>['correct','incorrect','partial','unanswered'].includes(r.verdict))?
@@ -574,8 +585,12 @@ async (input) => {
           candidates:candidates.slice(0,5).map(s=>({id:s.id,index:s.index,pdf_pages:[s.start+1,s.start+batch.pages_per_paper],
             ...(ranked?{correct_rate:rate(s)}:{}),pages:Array.from({length:batch.pages_per_paper},(_,i)=>input.origin+B+'/pages/'+(s.start+i)+'?original=true&student_id='+encodeURIComponent(s.id))})),submitted:false};
       }
-      await api('POST',B+'/analysis',{reference_student_id:reference});transitions.push({action:'analysis_started'});
+      const started=await api('POST',B+'/analysis',{reference_student_id:reference});
+      transitions.push({action:'analysis_start_requested',
+        response_status:typeof started?.status==='string'?started.status.slice(0,100):null});
       a=await full();
+      if(a.status==='not_generated')return {outcome:'waiting',waiting_for:'analysis_start',
+        analysis_status:a.status,submitted:false};
     }
     const deadline=executionDeadline;
     const visited=new Set();

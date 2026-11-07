@@ -570,14 +570,15 @@ def main():
         if args.action=='run' and args.follow:
             calls=list(data.get('calls',[]));transitions=list(data.get('transitions',[]))
             while data.get('ok') and data.get('result',{}).get('outcome')=='waiting' and time.monotonic()-started<args.max_seconds:
-                if data['result'].get('waiting_for') in ('grading','grading_stop','task_stop'):
+                if data['result'].get('waiting_for') in ('grading','grading_stop','task_stop','analysis_start'):
                     time.sleep(min(args.interval,max(0,args.max_seconds-(time.monotonic()-started))))
                 if time.monotonic()-started>=args.max_seconds:break
                 print(json.dumps({'outcome':'waiting','analysis_status':data['result'].get('analysis_status'),
                                   'elapsed_seconds':round(time.monotonic()-started,1)},ensure_ascii=False),file=sys.stderr,flush=True)
                 execution_args=copy.copy(args)
                 execution_args.timeout=min(args.timeout,max(.001,args.max_seconds-(time.monotonic()-started)))
-                execution_args.observe_analysis=(data['result'].get('analysis_status') in ('generating','catalog_confirmed','frames_confirmed','processing') and data['result'].get('waiting_for') not in ('grading','grading_stop','task_stop','media'))
+                execution_args.observe_analysis=(data['result'].get('waiting_for')=='analysis_start' or
+                    data['result'].get('analysis_status') in ('generating','catalog_confirmed','frames_confirmed','processing') and data['result'].get('waiting_for') not in ('grading','grading_stop','task_stop','media'))
                 data=execute(execution_args,'run',plan,data.get('checkpoint'))
                 calls.extend(data.get('calls',[]));transitions.extend(data.get('transitions',[]))
             data['calls']=calls;data['transitions']=transitions

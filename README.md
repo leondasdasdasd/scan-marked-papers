@@ -26,9 +26,9 @@ WorkBuddy 使用“专家·技能·连接器 → 技能 → 添加技能 → 上
 - 编排未覆盖的定点步骤先查api-list，用受限api-call；每项接口的功能、关键字段与前置条件见 [API参考](references/api.md)。写计划保留真实证据与当前版本，imports仅可走明确授权的专用sync命令。
 - evaluate 是同源接口执行宿主，无法仅靠 document.cookie 迁移 HttpOnly 登录态；除正常登录、确需文件注入和必要图证外，只有接口/工具具体不兼容才使用页面。缺能力时给已核实接入方法或恢复点，不要求老师配置参数，不擅装 Agent Browser、插件、Codex、Docker、浏览器或运行时。
 
-主 CLI 使用 Python 标准库；独立会话另外要求现有带内置 WebSocket 的 Node、Chrome/Edge/Chromium，以及已开放且已授权的来源 CDP。当前支持 piyue.yungu.org、HTTPS 的 *.app.yungu.org 及 loopback，不保证任意办公产品都能静默读取用户登录态。源页不导航、不点击，不读取或解密浏览器 Cookie 数据库，不重启用户 Chrome 开调试；目标仅接收缩到本 host 的 SESSION，建立新的 paper_session，并核验同一教师、学校和有效课堂会话。Cookie 只在受控进程内存中传递，受限本地控制记录不含 Cookie/令牌；任务结束用 session-close 清理目标上下文及本次自建浏览器，不退出源登录态、不跟随 SSO 全局退出。
+CLI入口需要现有Python，普通编排使用标准库；新PDF的prepare/upload真实页数解析仍需可用解析器，可选本地review渲染另需PyMuPDF/Pillow，不自动安装，不是零依赖；独立会话另外要求现有带内置 WebSocket 的 Node、Chrome/Edge/Chromium，以及已开放且已授权的来源 CDP。当前支持 piyue.yungu.org、HTTPS 的 *.app.yungu.org 及 loopback，不保证任意办公产品都能静默读取用户登录态。源页不导航、不点击，不读取或解密浏览器 Cookie 数据库，不重启用户 Chrome 开调试；目标仅接收缩到本 host 的 SESSION，建立新的 paper_session，并核验同一教师、学校和有效课堂会话。Cookie 只在受控进程内存中传递，受限本地控制记录不含 Cookie/令牌；任务结束用 session-close 清理目标上下文及本次自建浏览器，不退出源登录态、不跟随 SSO 全局退出。
 
-`access` 检查身份和课堂会话，失效时 `relogin` 启动一次既有登录导航；独立会话的恢复只在独立页进行，之后重新验证同一教师与学校。`roster` 一次给出关联覆盖及未关联卷定位；初次常规查看清楚者可批量关联，模糊者直接暂留，不追加放大/OCR或用剩余名单试探。媒体运行中由 run --follow 有界等待，检查结论以 completion/remaining 与全批覆盖为准。全参考页校对包渲染另需 pymupdf/Pillow，也可用现有看图工具；CLI 不自动审图。完整入口与计划见 [CLI 编排](references/cli.md)。
+`access` 检查身份和课堂会话，失效时 `relogin` 启动一次既有登录导航；独立会话的恢复只在独立页进行，之后重新验证同一教师与学校。`roster` 一次给出关联覆盖及未关联卷定位；初次常规查看清楚者可批量关联；姓名模糊或空白按原规则暂留，仅本次明确授权时可采用[SKILL.md](SKILL.md)规定的首轮清楚班级/班内number唯一精确匹配且无冲突例外，不追加放大/OCR、不猜编号或用剩余名单试探。媒体运行中由 run --follow 有界等待，检查结论以 completion/remaining 与全批覆盖为准。审图默认用平台现有授权原页/题图和宿主看图能力或现有浏览器截图，题图缺上下文或批注须对照原页；不默认下载整份PDF或生成校对包。本地review仅在离线、平台图不可用或明确像素校准等具体理由下回退，渲染缺依赖不阻断平台图片主路径；URL、图包与标记均不代表实际已审。完整入口与计划见 [CLI 编排](references/cli.md)。
 
 预切正常且有非空题框、实际审过全部参考页后，无修改可零PATCH确认；失败/空框不能批准。目录修改用受限编辑接口保存并回读，catalog --plan只确认已审目录与本批范围，不提交课堂；有重复卷先处理审查边界。已审作答结构可定点修复，保留教师原判。checkpoint是有限恢复记录，不是服务端exactly-once；超时或部分失败先回读，不重放整包。
 

@@ -100,6 +100,18 @@ class OutputTests(unittest.TestCase):
                 self.assertEqual(paperflow.main(), 0)
         self.assertEqual(execute.call_count, 1)
 
+    def test_analysis_initialization_follow_waits_and_observes_instead_of_dispatching(self):
+        clock=[0.0];seen=[]
+        def execute(args,action,plan=None,checkpoint=None):
+            seen.append((args.timeout,getattr(args,'observe_analysis',False)))
+            return {'ok':True,'result':{'outcome':'waiting','waiting_for':'analysis_start','analysis_status':'not_generated'}} if len(seen)==1 else {'ok':True,'result':{'outcome':'needs_frame_review'}}
+        args=['paperflow','--base-url','https://example.test','--batch-id','test','--browser-session','test','--interval','2','run','--follow','--max-seconds','3']
+        with patch.object(sys,'argv',args),patch.object(paperflow,'execute',side_effect=execute),\
+                patch.object(paperflow.time,'monotonic',side_effect=lambda:clock[0]),\
+                patch.object(paperflow.time,'sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+seconds)):
+            with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):self.assertEqual(paperflow.main(),0)
+        self.assertEqual(seen,[(3,False),(1,True)])
+
 
 if __name__ == '__main__':
     unittest.main()

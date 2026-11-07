@@ -70,6 +70,38 @@ function plan(w){
 const input=(action,extra={})=>({origin:location.origin,batch:'test',action,timeout:1,interval:2,...extra});
 const tests=[];
 function test(name,fn){tests.push([name,fn]);}
+test('accepted analysis start waits through initialization without a second dispatch or reference selection',async()=>{
+ const w=world();w.a.status='not_generated';w.batch.scan_reference_student_id='p1';
+ const old=global.fetch;
+ global.fetch=async(path,o)=>{
+  if(path===B+'/analysis'&&o.method==='POST'){
+   w.starts++;w.trace.push([o.method,path]);
+   return {ok:true,status:200,json:async()=>({status:'not_generated'})};
+  }
+  return old(path,o);
+ };
+ let d=await main(input('run',{stop_after:'frames'}));
+ assert(d.ok);assert.equal(d.result.outcome,'waiting');assert.equal(d.result.waiting_for,'analysis_start');
+ assert.equal(w.starts,1);assert.equal(d.transitions[0].response_status,'not_generated');
+ d=await main(input('run',{stop_after:'frames',checkpoint:d.checkpoint,observe_analysis:true}));
+ assert.equal(d.result.waiting_for,'analysis_start');assert.equal(w.starts,1);
+ w.a.status='awaiting_frames';
+ d=await main(input('run',{stop_after:'frames',checkpoint:d.checkpoint,observe_analysis:true}));
+ assert.equal(d.result.outcome,'needs_frame_review');assert.equal(w.starts,1);
+});
+test('paused organizer exposes bounded server recovery hints without extra reads or automatic retry',async()=>{
+ const w=world();Object.assign(w.a,{status:'failed',scan_student_states:{p1:'done',p2:'queued'},
+  error:'学校 AI 需要当前教师登录；服务重启后请进入该任务并继续',error_code:'GATEWAY_BINDING_REQUIRED',
+  recovery_action:'resume_with_session',resume_authorized:true,retryable:false,artifact_token:'private-fixture'});
+ const d=await main(input('run'));
+ assert.equal(d.result.outcome,'needs_targeted_recovery');assert.equal(d.result.failed_papers.length,0);
+ assert.equal(d.result.recovery.error_code,'GATEWAY_BINDING_REQUIRED');
+ assert.equal(d.result.recovery.recovery_action,'resume_with_session');
+ assert.equal(d.result.recovery.server_resume_authorized,true);assert.equal(d.result.retry_authorized,false);
+ assert.equal(d.result.next_action,'verify_current_session_and_authorized_resume');
+ assert(w.trace.every(([m])=>m==='GET'));assert.equal(w.trace.filter(([,p])=>p.includes('/analysis?')).length,1);
+ assert(!JSON.stringify(d.result).includes('private-fixture'));
+});
 test('frames endpoint saves geometric splits without confirming or organizing',async()=>{
  const w=world(),p=plan(w);
  const d=await main(input('run',{stop_after:'frames',plan:{frames:p}}));
