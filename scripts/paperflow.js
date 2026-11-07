@@ -66,13 +66,16 @@ async (input) => {
   }
   function snapshot(batch,a) {
     const types=a.business_question_catalog?.types||a.question_type_templates||[];
+    const preparation=a.reference_preparation?Object.fromEntries(Object.entries(a.reference_preparation)
+      .filter(([key])=>['status','remaining','issues','error_code','recovery_action','retryable'].includes(key))):null;
+    if(preparation?.recovery_action==='resume_with_session'&&['completed','partial'].includes(a.status))
+      preparation.resume_operation='reference-answers-resume';
     return {batch_id:batch.id,workflow_mode:batch.workflow_mode,pages_per_paper:batch.pages_per_paper,
       total_pages:batch.total_pages,analysis_status:a.status,read_version:a.read_version,frame_revision:a.frame_revision,
       catalog_revision:a.catalog_revision,analysis_confirmation_version:batch.analysis_confirmation_version||a.analysis_confirmation_version,
       recovery:recoveryHints(a),
       source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
-      reference_preparation:a.reference_preparation?Object.fromEntries(Object.entries(a.reference_preparation)
-        .filter(([key])=>['status','remaining','issues','error_code','recovery_action','retryable'].includes(key))):null,
+      reference_preparation:preparation,
       business_question_types:(Array.isArray(types)?types:[]).filter(t=>t&&typeof t==='object').map(t=>
         Object.fromEntries(Object.entries(t).filter(([key])=>['id','businessQuestionTypeId','name','isComposite'].includes(key)))),
       precut_diagnosis:a.status==='awaiting_frames'?frameProblem(a,batch.pages_per_paper):null,
@@ -273,7 +276,10 @@ async (input) => {
       const clearing=op.student_id===null;
       if(!paper||(!clearing&&!roster.students.some(s=>s.id===op.student_id))||pids.has(op.paper_id)||(!clearing&&sids.has(op.student_id))||
         op.evidence_confirmed!==true||typeof op.evidence_note!=='string'||!op.evidence_note.trim())fail('identity_evidence_required');
-      if(!clearing&&(roster.papers||[]).some(p=>p.id!==op.paper_id&&p.student_id===op.student_id))fail('association_already_occupied');
+      const occupied=!clearing&&(roster.papers||[]).filter(p=>p.id!==op.paper_id&&p.student_id===op.student_id);
+      if(occupied?.length)fail('association_already_occupied',{paper_id:op.paper_id,student_id:op.student_id,
+        roster_revision:roster.revision,occupied_by:occupied.map(p=>({paper_id:p.id,index:p.index})),
+        next_action:'verify_conflicting_paper_evidence_or_keep_unlinked'});
       pids.add(op.paper_id);if(!clearing)sids.add(op.student_id);
     }
     const saved=[];
@@ -497,9 +503,11 @@ async (input) => {
       server_resume_authorized:typeof a.resume_authorized==='boolean'?a.resume_authorized:null};
   }
   async function recoverySummary(a,batch){
-    const states=a.scan_student_states||{},counts={},failed=[];
+    const states=a.scan_student_states||{},counts={},failed=[],incomplete=[];
     for(const paper of batch.students||[]){
       const state=states[paper.id]||'unknown';counts[state]=(counts[state]||0)+1;
+      if(state!=='done')incomplete.push({paper_id:paper.id,index:paper.index,
+        pdf_pages:[paper.start+1,paper.start+batch.pages_per_paper],state});
       if(state!=='failed')continue;
       const result=(a.students||[]).find(s=>s.id===paper.id);
       failed.push({paper_id:paper.id,index:paper.index,pdf_pages:[paper.start+1,paper.start+batch.pages_per_paper],
@@ -523,11 +531,12 @@ async (input) => {
       }catch(e){detailsStatus='unavailable';detailsError={code:e.code||'api_failed',status:e.details?.status??null,
         next_action:e.details?.next_action||'read_state_before_retry'};}
     }
-    return {student_state_counts:counts,failed_papers:failed,read_version:a.read_version,failure_details_status:detailsStatus,
+    return {student_state_counts:counts,failed_papers:failed,incomplete_papers:incomplete,read_version:a.read_version,failure_details_status:detailsStatus,
       recovery:recoveryHints(a),
       ...(detailsError?{failure_details_error:detailsError}:{}),
       ...(a.error||a.catalog_error?{analysis_error:String(a.error||a.catalog_error).slice(0,500)}:{}),
-      retry_authorized:false,next_action:a.recovery_action==='resume_with_session'?
+      retry_authorized:false,next_action:a.recovery_action==='resume_with_session'||
+        a.resume_authorized===true&&incomplete.length>0&&!failed.length?
         'verify_current_session_and_authorized_resume':'inspect_failed_papers_before_retry'};
   }
   async function observeAnalysis(deadline){
@@ -649,7 +658,7 @@ async (input) => {
         if(input.plan?.associations)await associate(input.plan.associations);
         const check=await inspectOrCheck('check',{batch});
         return {...check,...(check.waiting_for_media?{outcome:'waiting',waiting_for:'media',analysis_status:a.status}:{}),visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
-          expected_granularity_verified:!!expected,review_tasks:reviewTasks(check,a,batch),submitted:false};
+          expected_granularity_verified:!!expected,review:snapshot(batch,a),review_tasks:reviewTasks(check,a,batch),submitted:false};
       }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,
         ...(['partial','failed'].includes(a.status)?await recoverySummary(a,batch):{}),submitted:false};
       const key=JSON.stringify([a.status,a.frame_revision,a.catalog_revision]);

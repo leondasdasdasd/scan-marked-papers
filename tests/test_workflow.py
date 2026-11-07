@@ -180,6 +180,44 @@ test('catalog image projection omits external or credential-bearing locations an
  assert(!JSON.stringify(d.result).includes('private-fixture'));assert(!JSON.stringify(d.result).includes('password'));
  assert.equal(w.trace.length,2);
 });
+test('completed run returns its existing versioned catalog for actual review without a separate snapshot read',async()=>{
+ const w=world();w.finish();w.a.read_version='review-version';
+ Object.assign(w.a.questions[0],{stem:'printed question',standard_answer:'3',figure_images:[],crop_images:[]});
+ const d=await main(input('run'));assert(d.ok);const review=d.result.review;
+ assert.equal(review.read_version,'review-version');assert.equal(review.reviewed,false);
+ assert.equal(review.questions[0].stem,'printed question');assert.deepEqual(review.questions[0].figure_images,[]);
+ assert.equal(w.trace.filter(([m,p])=>p===B+'/analysis?view=catalog').length,1);
+ assert(!('students' in review));assert.equal(d.result.full_accuracy_verified,false);
+});
+test('interrupted analysis exposes unfinished reading papers instead of suggesting nonexistent failures',async()=>{
+ const w=world();w.finish();w.a.status='failed';w.a.resume_authorized=true;w.a.retryable=true;
+ w.a.scan_student_states={p1:'done',p2:'reading'};w.a.error='Interrupted; completed results retained';
+ const d=await main(input('run'));assert(d.ok);assert.equal(d.result.outcome,'needs_targeted_recovery');
+ assert.deepEqual(d.result.failed_papers,[]);
+ assert.deepEqual(d.result.incomplete_papers,[{paper_id:'p2',index:2,pdf_pages:[2,2],state:'reading'}]);
+ assert.equal(d.result.next_action,'verify_current_session_and_authorized_resume');
+ assert.equal(d.result.retry_authorized,false);assert.equal(d.result.recovery.server_resume_authorized,true);
+ assert(w.trace.every(([m])=>m==='GET'));assert(!w.trace.some(([m,p])=>p.endsWith('view=summary')));
+});
+test('association collision returns the current occupied paper locations without clearing or another roster read',async()=>{
+ const w=world();const d=await main(input('associate',{plan:{revision:1,assignments:[
+  {paper_id:'p1',student_id:'12',evidence_confirmed:true,evidence_note:'Visible name matched current roster'}]}}));
+ assert.equal(d.ok,false);assert.equal(d.error.code,'association_already_occupied');
+ assert.deepEqual(d.error.occupied_by,[{paper_id:'p2',index:2}]);assert.equal(d.error.roster_revision,1);
+ assert.equal(d.error.next_action,'verify_conflicting_paper_evidence_or_keep_unlinked');
+ assert.equal(w.trace.filter(([m,p])=>p===B+'/roster').length,1);assert(w.trace.every(([m])=>m==='GET'));
+ assert.equal(w.roster.papers[0].student_id,'11');assert.equal(w.roster.papers[1].student_id,'12');
+});
+test('completed reference-answer session recovery points to its existing operation without authorizing or executing it',async()=>{
+ const w=world();w.finish();w.a.reference_preparation={status:'waiting',remaining:4,
+  error_code:'GATEWAY_BINDING_REQUIRED',recovery_action:'resume_with_session',retryable:false,artifact_token:'private-reference-token'};
+ let d=await main(input('snapshot'));assert(d.ok);
+ assert.equal(d.result.reference_preparation.resume_operation,'reference-answers-resume');
+ assert.equal(d.result.reference_preparation.remaining,4);assert(!JSON.stringify(d.result).includes('private-reference-token'));
+ assert(w.trace.every(([m])=>m==='GET'));assert.equal(w.trace.length,2);
+ w.a.status='awaiting_frames';w.trace.length=0;d=await main(input('snapshot'));
+ assert(!('resume_operation' in d.result.reference_preparation));assert.equal(w.trace.length,2);
+});
 test('9 edits are validated before one write and six independent business questions are checked',async()=>{
  const w=world(),p=plan(w);const d=await main(input('run',{plan:{frames:p}}));
  assert(d.ok);assert(d.result.ready);assert.equal(w.patches,1);assert.equal(w.a.questions.length,7);
