@@ -383,6 +383,7 @@ test('empty failed precut is a recovery boundary, never a visual approval',async
  const d=await main(input('run'));assert.equal(d.result.outcome,'needs_precut_recovery');assert.deepEqual(d.result.diagnosis.retryable_pages,[0]);assert.equal(w.starts,0);assert.equal(w.patches,0);
  assert.equal(d.result.review.source_pdf_sha256,w.a.source_pdf_sha256);
  assert.equal(d.result.review.reference_student_id,'p1');assert.equal(d.result.review.reviewed,false);
+ assert.deepEqual(d.result.diagnosis.manual_recovery,{operation:'replace_page',pages:[0],review_required:true,auto_confirm:false});
  assert.deepEqual(d.result.review.precut_diagnosis,d.result.diagnosis);
  assert.equal(w.trace.length,4);
 });
@@ -391,6 +392,7 @@ test('snapshot retains failed page diagnosis and valid-page frames without anoth
  w.a.frames=w.a.frames.map(f=>({...f,regions:f.regions.map(r=>({...r,page:1}))}));
  const d=await main(input('snapshot'));assert(d.ok);assert.deepEqual(d.result.precut_diagnosis.failed_pages,[0]);
  assert.equal(d.result.precut_diagnosis.frame_revision,'r1');assert.equal(d.result.frames.length,2);
+ assert.equal(d.result.precut_diagnosis.manual_recovery,undefined);
  assert(d.result.frames.every(f=>f.regions[0].page===1));assert.equal(w.trace.length,2);
  w.finish();const completed=await main(input('snapshot'));assert.equal(completed.result.precut_diagnosis,null);
 });

@@ -126,6 +126,8 @@ async (input) => {
     if(!(a.frames||[]).length||failed.length||issues.length)return {
       code:!(a.frames||[]).length?'precut_empty':'precut_pages_failed',failed_pages:failed,
       issues:issues.map(s=>String(s).slice(0,500)),frame_revision:a.frame_revision,
+      ...(!(a.frames||[]).length&&retryPages.length?{manual_recovery:{operation:'replace_page',pages:retryPages,
+        review_required:true,auto_confirm:false}}:{}),
       retryable_pages:retryPages.filter(p=>!(a.frames||[]).some(f=>f.source==='manual'&&f.regions.some(r=>r.page===p)))};
     return null;
   }

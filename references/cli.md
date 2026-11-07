@@ -1,6 +1,6 @@
 # 批量 CLI 编排
 
-本说明对应主入口 `scripts/paperflow.py` 与 `paperflow.js`；`paperflow_base.py`仅为旧兼容入口。三种业务流程——已批扫描、供应商快速批改、答案卷智能批改——直接用专用CLI/run；参数查当前子命令help，本参考只读当前入口或阶段，未覆盖才查api-list及对应契约，不预读API全文或适配器源码。只有接口不支持/不兼容或工具缺能力的具体证据，才定点回退页面。先按SKILL.md让老师选定处理模式、批改后是否整理及是否同步。只批改用run --stop-after grading，仅预切准备用run --stop-after frames，整理路径用run --stop-after check；同步在检查后另走明确授权的sync。已有导入与停止标记优先只读。办公接入边界见 [office-agents.md](office-agents.md)。
+本说明对应主入口 `scripts/paperflow.py` 与 `paperflow.js`；`paperflow_base.py`仅为旧兼容入口。三种业务流程——已批扫描、供应商快速批改、答案卷智能批改——直接用专用CLI/run；参数查当前子命令help，本参考只读当前入口或阶段，未覆盖才查api-list及对应契约，不预读API全文或适配器源码。登录、确需文件注入、必要图证或接口不支持/不兼容、工具缺能力时按需使用现有页面。先按SKILL.md让老师选定处理模式、批改后是否整理及是否同步。只批改用run --stop-after grading，仅预切准备用run --stop-after frames，整理路径用run --stop-after check；同步在检查后另走明确授权的sync。已有导入与停止标记优先只读。办公接入边界见 [office-agents.md](office-agents.md)。
 
 ## 每天首次使用与版本重载
 
@@ -216,7 +216,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --brows
 
 上传经当前授权浏览器的 FormData 接口执行，不导出认证材料，不让模型读取或手工拼接 PDF 的 base64。脚本自建的本机独立浏览器用原生 setFileInputFiles；通过 target-url 使用的已有独立浏览器，由 CLI 内部以受控分块传输文件字节，在目标浏览器构造 File、绑定输入后提交 FormData，原文件内容及内部编码不进入提示词、计划或输出。playwright wrapper 默认只为本次创建隐藏 `#paperflow-upload`，用原生 setInputFiles 注入并清理；已有实际 input 可用 `--file-input-selector <已核实选择器>`。其他现有工具只负责原生文件注入，再执行生成的接口脚本，不默认导航或点击上传表单。
 
-emit路径仍加`--emit-script <JS>`，支持三种模式；生成不上传。执行时输入控件未绑定文件返回needs_file_binding，先用该产品已有原生文件工具绑定同一PDF，再执行/collect，不手写文件请求。先查`GET /api/uploads/{key}`，已completed恢复原batch；deleted不自动重建。超时或scope失败保留upload_receipt，继续同key查原状态；upload_uncertain先查状态，不换key或盲重传。uploaded仅表示创建/恢复与必要scope绑定，不等于批改、检查或同步完成。
+emit路径仍加`--emit-script <JS>`，支持三种模式；生成不上传。执行时输入控件未绑定文件返回needs_file_binding，先用该产品已有原生文件工具绑定同一PDF，再执行/collect，不手写文件请求。先查`GET /api/uploads/{key}`，已completed恢复原batch；deleted不自动重建。超时或scope失败保留upload_receipt，继续同key查原状态；upload_uncertain先查状态，不换key或盲重传。uploaded仅表示创建/恢复与必要scope绑定，不等于批改、检查或同步完成。成功回执复用已有batch返回preview_papers前5份中的合法项{id,index,pdf_pages,pages,reviewed:false}，仅实际合法start/index生成本origin原页URL，不额外GET。已授权上传后优先实际看这些平台原页核来源/结构；尚未绑定范围时先核图再scope，已有可靠确认的scope-plan可随上传正常绑定，CLI不拦截，不默认本地渲染或额外snapshot；缺定位不猜URL，预览不代表全部材料已审，混卷/缺页/页序及后续全参考页/标准题核验照旧；意图未定不为看图建批次。
 
 ## 受限接口调用
 
@@ -245,7 +245,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 | `needs_reference` | 按真实清晰度、完整性与教师批注实际审阅并选本批参考卷，直接 run --reference-paper <卷ID> --follow；无须单字段plan。若全批已有完整已知verdict，候选按现成正确率排序；否则仍取前几份轻量比较，不增加识别调用。candidates含id/index/pdf_pages/原图URL，correct_rate仅在有真实统计时使用，范围0–1，不把缺失当零或凭空编百分比；候选摘要不是处理范围 |
 | `needs_file_binding`、`upload_uncertain` | 前者只补原生文件绑定后执行既有脚本；后者查原key状态并保留upload_receipt，不改文件/参数或盲重传 |
 | `needs_grading_recovery`、`needs_analysis_recovery` | 按真实failed/诊断定位原批改或后续整理缺口，分别采用适用的定点恢复计划，不切模式、重跑done或把部分范围当完成 |
-| `needs_precut_recovery` | run同时携带 `review` snapshot，优先复用它；先用现有平台原页/截图核验；仅明确本地回退理由且已有原PDF时才配对传 `--review-pdf`/`--review-out` 生成图包，无须为渲染另拉snapshot。snapshot和生成图包仍不算实际审阅。读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
+| `needs_precut_recovery` | run同时携带 `review` snapshot，优先复用它；先用现有平台原页/截图核验；仅明确本地回退理由且已有原PDF时才配对传 `--review-pdf`/`--review-out` 生成图包，无须为渲染另拉snapshot。snapshot和生成图包仍不算实际审阅。空预切且页数已知时，diagnosis.manual_recovery提示{operation:replace_page,pages,review_required:true,auto_confirm:false}，仅指向已有手工回退，不自动写入、重试或确认；实际审图后按现成frames契约修复。读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
 | `needs_frame_review` | 复用 run 生成的 review 包，实际核对全部参考页，一次整理必要框修改，再应用并确认。没有包且已有本地原 PDF 时才单独 review，已有元数据优先 --metadata 离线复用；已有链接无本地 PDF 时按原技能读取参考页，不索要或重传原卷 |
 | `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先集中修改并用 catalog-save-draft/catalog-save-review 保存一次，回读新版本与实际任务状态，历史 ready 作废；实际审完后用catalog --plan确认，再run |
 | `needs_targeted_recovery`、partial/failed 或检查阻塞 | run 的 partial/failed 回执直接复用已读状态，附 student_state_counts、failed_papers（paper_id/index/pdf_pages、最多3条且每条最多500字的 issues、incomplete_pages）及可得 analysis_error；incomplete_papers按本批现有scan_student_states列出所有非done卷的paper_id/index/pdf_pages/state，非failed也可定位，不新增GET。不含答案、无自动重试，retry_authorized=false；仅失败卷缺少原因且仍有本轮预算时补一次 analysis?view=summary GET，read_version 非空且相同才合并原因。已有原因不补查；版本变动或缺失不混合，补查失败或预算尽仍保留原定位，读 failure_details_status 与可得 failure_details_error 判断详情缺口。先用该定位，已有信息足够时不重复 snapshot/summary/diagnose；摘要不足才定点补证。诊断不解决服务器失败，也不授权绕过同请求传输上限。再读必要 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |

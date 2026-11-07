@@ -156,13 +156,26 @@ function uploadWorld(){
   if(path==='/api/uploads/stable-upload-1')return w.uploadStatus;
   if(path==='/api/batches'&&o.method==='POST'){
    assert(o.body instanceof FormData);assert.equal(o.headers['Content-Type'],undefined);assert.equal(o.headers['Idempotency-Key'],'stable-upload-1');
-   assert.equal(o.body.get('workflow_mode'),'scan');assert.equal(o.body.get('has_answer_paper'),'false');w.uploads++;w.uploadStatus={status:'completed',batch_id:'test'};return w.batch;
+   assert.equal(o.body.get('workflow_mode'),'scan');assert.equal(o.body.get('has_answer_paper'),String(w.uploadPlan.fields.has_answer_paper));w.uploads++;w.uploadStatus={status:'completed',batch_id:'test'};return w.batch;
   }
  });return w;
 }
 test('upload sends FormData and resumes the same batch without uploading twice',async()=>{
  const w=uploadWorld();let d=await main(input('upload',{batch:'',plan:w.uploadPlan}));assert(d.ok);assert.equal(w.uploads,1);assert.equal(d.checkpoint.batch_id,'test');
+ assert.equal(d.result.preview_papers.length,2);assert.equal(d.result.preview_papers[0].reviewed,false);
+ assert.deepEqual(d.result.preview_papers[0].pdf_pages,[1,1]);
+ assert.deepEqual(d.result.preview_papers[0].pages,[location.origin+B+'/pages/0?original=true&student_id=p1']);
+ assert.equal(w.trace.length,0);
  d=await main(input('upload',{batch:'',plan:w.uploadPlan,checkpoint:d.checkpoint}));assert(d.ok);assert.equal(d.result.batch_id,'test');assert.equal(w.uploads,1);
+});
+test('upload previews use actual student offsets after an answer paper and omit missing or invalid offsets',async()=>{
+ let w=uploadWorld();w.uploadPlan.fields.has_answer_paper=true;w.batch.total_pages=3;
+ w.batch.students.forEach((s,i)=>s.start=i+1);
+ let d=await main(input('upload',{batch:'',plan:w.uploadPlan}));assert(d.ok);
+ assert.deepEqual(d.result.preview_papers[0].pdf_pages,[2,2]);
+ assert.deepEqual(d.result.preview_papers[0].pages,[location.origin+B+'/pages/1?original=true&student_id=p1']);
+ w=uploadWorld();delete w.batch.students[0].start;w.batch.students[1].start=99;
+ d=await main(input('upload',{batch:'',plan:w.uploadPlan}));assert(d.ok);assert.deepEqual(d.result.preview_papers,[]);
 });
 test('upload rejects a different file and a changed plan before sending bytes',async()=>{
  const w=uploadWorld();w.uploadPlan.sha256='0'.repeat(64);const d=await main(input('upload',{batch:'',plan:w.uploadPlan}));assert.equal(d.error.code,'upload_file_mismatch');assert.equal(w.uploads,0);

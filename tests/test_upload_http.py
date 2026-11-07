@@ -24,7 +24,7 @@ class UploadHttpTests(unittest.TestCase):
                 for _ in range(2):doc.new_page()
                 doc.save(pdf)
             original=pdf.read_bytes();seen=[];errors=[];uploaded=False
-            batch={'id':'newbatch','workflow_mode':'scan','grading_engine':'llm','total_pages':2,'pages_per_paper':1,'students':[{'id':'p1'},{'id':'p2'}]}
+            batch={'id':'newbatch','workflow_mode':'scan','grading_engine':'llm','total_pages':2,'pages_per_paper':1,'students':[{'id':'p1','index':1,'start':0},{'id':'p2','index':2,'start':1}]}
             roster={'revision':0,'semester_id':None,'classes':[]}
             class Handler(BaseHTTPRequestHandler):
                 def log_message(self,*args):pass
@@ -73,6 +73,7 @@ const native=global.fetch;global.fetch=(path,options)=>native(new URL(path,locat
                     collect=subprocess.run([sys.executable,str(CLI),'--base-url',origin,'--checkpoint',str(cp),'collect','--result',str(result)],capture_output=True,text=True)
                     self.assertEqual(collect.returncode,0,collect.stdout+collect.stderr);receipt=json.loads(collect.stdout)['result']
                     self.assertEqual(receipt['batch_id'],'newbatch');self.assertEqual(receipt['page_count_source'],'server')
+                    self.assertEqual(receipt['preview_papers'][0]['pages'],[origin+'/api/batches/newbatch/pages/0?original=true&student_id=p1'])
                 saved=json.loads(cp.read_text());self.assertEqual(saved['batch_id'],'newbatch');self.assertEqual(saved['upload_receipt']['sha256'],hashlib.sha256(original).hexdigest())
                 self.assertEqual(sum(m=='POST' and p=='/api/batches' for m,p in seen),1)
                 self.assertEqual(sum(m=='PUT' for m,p in seen),1);self.assertFalse(errors,errors)

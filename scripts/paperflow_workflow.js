@@ -232,7 +232,11 @@
     }
     return {outcome:'uploaded',batch_id:batch.id,link:input.origin+'/exams/'+batch.id+(batch.workflow_mode==='scan'?'/analysis':''),
       workflow_mode:batch.workflow_mode,grading_engine:batch.grading_engine,total_pages:batch.total_pages,pages_per_paper:batch.pages_per_paper,
-      papers:batch.students.length,page_count_source:'server',submitted:false};
+      papers:batch.students.length,page_count_source:'server',
+      preview_papers:batch.students.slice(0,5).filter(s=>Number.isInteger(s.start)&&s.start>=0&&s.start+per<=pages&&
+        Number.isInteger(s.index)&&s.index>0).map(s=>({id:s.id,index:s.index,pdf_pages:[s.start+1,s.start+per],
+        pages:Array.from({length:per},(_,i)=>input.origin+'/api/batches/'+batch.id+'/pages/'+(s.start+i)+
+          '?original=true&student_id='+encodeURIComponent(s.id)),reviewed:false})),submitted:false};
   }
   async function sync(p){
     if(input.authorize_sync!==true)fail('sync_authorization_required');evidence(p);
