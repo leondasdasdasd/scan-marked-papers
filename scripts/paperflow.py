@@ -106,6 +106,8 @@ def local_error(exc):
     details={
         'file_path_conflict':{'next_action':'use_distinct_input_output_checkpoint_paths'},
         'invalid_frame_id':{'constraint':'[A-Za-z0-9_-]{1,100}','next_action':'put_display_question_number_in_label'},
+        'unsupported_edit':{'required_field':'type','allowed_types':['set','shift','split','promote_children','replace_page'],
+            'next_action':'fix_edit_operation_type'},
         'invalid_region':{'constraint':'page is a nonnegative integer; bbox is finite [x1,y1,x2,y2] within 0..1 with x1<x2 and y1<y2'},
     }
     return {'ok':False,'error':{'code':code,**details.get(code,{})}}

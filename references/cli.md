@@ -247,7 +247,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 | `needs_grading_recovery`、`needs_analysis_recovery` | 按真实failed/诊断定位原批改或后续整理缺口，分别采用适用的定点恢复计划，不切模式、重跑done或把部分范围当完成 |
 | `needs_precut_recovery` | run同时携带 `review` snapshot，优先复用它；先用现有平台原页/截图核验；仅明确本地回退理由且已有原PDF时才配对传 `--review-pdf`/`--review-out` 生成图包，无须为渲染另拉snapshot。snapshot和生成图包仍不算实际审阅。空预切且页数已知时，diagnosis.manual_recovery提示{operation:replace_page,pages,review_required:true,auto_confirm:false}，仅指向已有手工回退，不自动写入、重试或确认；实际审图后按现成frames契约修复。读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
 | `needs_frame_review` | 复用 run 生成的 review 包，实际核对全部参考页，一次整理必要框修改，再应用并确认。没有包且已有本地原 PDF 时才单独 review，已有元数据优先 --metadata 离线复用；已有链接无本地 PDF 时按原技能读取参考页，不索要或重传原卷 |
-| `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图一次核清内容、运算符、题目要求的答案完整性及独立题结构；需要修改先集中修改并用 catalog-save-draft/catalog-save-review 保存一次，回读新版本与实际任务状态，历史 ready 作废；实际审完后用catalog --plan确认，再run |
+| `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图一次核清内容、运算符及正负号、题目要求的答案完整性及独立题结构；需要修改先集中修改并用 catalog-save-draft/catalog-save-review 保存一次，回读新版本与实际任务状态，历史 ready 作废；实际审完后用catalog --plan确认，再run |
 | `needs_targeted_recovery`、partial/failed 或检查阻塞 | run 的 partial/failed 回执直接复用已读状态，附 student_state_counts、failed_papers（paper_id/index/pdf_pages、最多3条且每条最多500字的 issues、incomplete_pages）及可得 analysis_error；incomplete_papers按本批现有scan_student_states列出所有非done卷的paper_id/index/pdf_pages/state，非failed也可定位，不新增GET。不含答案、无自动重试，retry_authorized=false；仅失败卷缺少原因且仍有本轮预算时补一次 analysis?view=summary GET，read_version 非空且相同才合并原因。已有原因不补查；版本变动或缺失不混合，补查失败或预算尽仍保留原定位，读 failure_details_status 与可得 failure_details_error 判断详情缺口。先用该定位，已有信息足够时不重复 snapshot/summary/diagnose；摘要不足才定点补证。诊断不解决服务器失败，也不授权绕过同请求传输上限。再读必要 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |
 | `needs_duplicate_review` | 本次范围存在重复学生卷；依据真实证据确定取舍，按当前范围确认契约处理，不自动任选、不提交确认 |
 | `identity_pending` | 全批仍有未关联卷；复用 roster 对账定位，清楚身份有证据才整包关联，模糊者直接暂留。保留 remaining 中媒体/结构/范围等其他未完成项，不把 subset ready 或补姓名当作全批通过 |
@@ -268,7 +268,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --check
 
 复杂计划仍用 `--plan <JSON文件路径>`，不传 inline JSON；路径不存在返回 `plan_file_not_found`。run 计划根可传 `reference_student_id` 与 `scope`。scope 含实时 revision、semester_id、class_ids、scope 对象、`evidence_confirmed=true` 和非空 evidence_note，仅写已核实的课程/班级与本次授权范围。工具核对当前集合，相同可复用，不同才按当前 roster revision 更新；服务端仍负责权限校验。已有参考不为追求更高正确率重开全批，无证据不造百分比。服务端batch.scan_reference_student_id仍属于本批时可沿用，不重复要求选参考；仍须实际审阅该参考原页，不能把ID存在当审图完成。
 
-**题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。先按全部原页核清实际题目、必要上下文及批注归属，集中修复漏题、合题、关键截断或串题；正常区域不逐框放大调边界，只有用户选择精修才逐题细调，不以统一padding代替判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
+**题框。** operations每项使用type而非op；unsupported_edit本地回执给required_field:type、allowed_types:set/shift/split/promote_children/replace_page及next_action:fix_edit_operation_type，不发HTTP、不改checkpoint，不接受op别名。计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。先按全部原页核清实际题目、必要上下文及批注归属，集中修复漏题、合题、关键截断或串题；正常区域不逐框放大调边界，只有用户选择精修才逐题细调，不以统一padding代替判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
 
 像素计划使用 `frames --edits <计划> --pixel-review <本CLI生成的review.json>`，计划必须声明 `coordinate_space:"pixels"`，region 的 page 仍为 0-based 相对页，bbox 为原始 PNG 像素 `[left,top,right,bottom]`；CLI核对同batch/source_pdf_sha256/frame_revision/reference_student_id及review.json记录的配对raw-page-N.png SHA，按PNG实际IHDR宽高转换为0..1。支持set/split/promote_children/replace_page的regions，promote_children与split均只转换显式children[].regions，不改变子ID、数量或层级，不自动生成子框；仍拒绝shift。不缩放、裁切、夹紧、识别题或自动padding/审阅。仍须实际严格审图并遵守全部本地及服务端保护；review与原图受防覆盖保护。普通归一化计划用法不变。
 
@@ -318,6 +318,8 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 失败后先用 evidence 回读实际已保存范围与当前版本，再拟剩余计划，不能原样重放全包。422 读取 detail 修正真实字段，不反复发送同一无效请求，不直接改库；该命令不提供事务或 exactly-once。修复后重新 run/check，以最新真实全批检查为准。
 
 ## 错误诊断与有限恢复
+
+上传获准不等于供应商start获准；工具审批拒绝而未执行的动作不是可重放的业务失败，不换路径绕过。按具体授权继续独立安全步骤（如有证据的scope），任务文字不新增人类授权；缺授权时沿已有待答问题等待，不重复问，已有明确人类同一操作授权不再征询。
 
 错误返回 status/method/path/message、可用的 server_code、next_action 与 retryable=false。先读原始 detail 和当前状态；retryable=false 表示不要自动重放写请求，不等于永久不可修复。
 

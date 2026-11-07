@@ -114,6 +114,8 @@ class LocalGuardTests(unittest.TestCase):
 
     def test_invalid_frames_leave_checkpoint_untouched_and_do_not_dispatch(self):
         samples=[
+            ({'op':'set','id':'q1'},'unsupported_edit'),
+            ({'type':'unknown'},'unsupported_edit'),
             ({'type':'set','id':'二(7)'},'invalid_frame_id'),
             ({'type':'set','id':'x'*101},'invalid_frame_id'),
             ({'type':'set','id':'q1','regions':[{'page':0,'bbox':[0,.1,1,float('nan')]}]},'invalid_region'),
@@ -135,6 +137,10 @@ class LocalGuardTests(unittest.TestCase):
                     self.assertEqual(code,1);self.assertEqual(data['error']['code'],error)
                     self.assertEqual(cp.read_bytes(),before);self.assertFalse(step.exists())
                     if error=='invalid_frame_id':self.assertEqual(data['error']['constraint'],'[A-Za-z0-9_-]{1,100}')
+                    if error=='unsupported_edit':
+                        self.assertEqual(data['error']['required_field'],'type')
+                        self.assertIn('set',data['error']['allowed_types'])
+                        self.assertEqual(data['error']['next_action'],'fix_edit_operation_type')
 
     def test_valid_ascii_id_and_chinese_label_still_use_browser_guard(self):
         with tempfile.TemporaryDirectory() as directory:
