@@ -46,6 +46,17 @@ class OutputTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text())['checkpoint'], {'step': 3})
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
+    def test_follow_passes_only_remaining_budget_to_observation(self):
+        clock=[0.0];seen=[]
+        def execute(args,action,plan=None,checkpoint=None):
+            seen.append((args.timeout,getattr(args,'observe_analysis',False)))
+            clock[0]+=2
+            return {'ok':True,'result':{'outcome':'waiting','analysis_status':'generating'}} if len(seen)==1 else {'ok':True,'result':{'outcome':'needs_frame_review'}}
+        args=['paperflow','--base-url','https://example.test','--batch-id','test','--browser-session','test','run','--follow','--max-seconds','3']
+        with patch.object(sys,'argv',args),patch.object(paperflow,'execute',side_effect=execute),patch.object(paperflow.time,'monotonic',side_effect=lambda:clock[0]):
+            with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):self.assertEqual(paperflow.main(),0)
+        self.assertEqual(seen,[(3,False),(1,True)])
+
     def test_follow_stops_on_blocked_result_without_retrying_check(self):
         args = ['paperflow', '--base-url', 'https://example.test', '--batch-id', 'test',
             '--browser-session', 'test', 'run', '--follow']

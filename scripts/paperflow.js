@@ -6,6 +6,7 @@ async (input) => {
   const targetReceipt=input.action==='run'||input.checkpoint?.stop_after!==undefined?{stop_after:stopAfter}:{};
   const B='/api/batches/'+input.batch;
   const calls=[], transitions=[];
+  const executionDeadline=performance.now()+input.timeout*1000;
   let receipt=input.checkpoint?.frame_receipt||null;
   let associations=input.checkpoint?.association_receipt||null;
   let catalogReceipt=input.checkpoint?.catalog_receipt||null;
@@ -206,7 +207,7 @@ async (input) => {
     return {already_applied:already,frame_revision:next.frame_revision,frame_count:next.frames.length};
   }
   async function inspectOrCheck(action,snapshot){
-    const d=await legacy({...input,action,snapshot,api,prepare:action==='check'});
+    const d=await legacy({...input,action,snapshot,api,deadline:executionDeadline,prepare:action==='check'});
     calls.push(...(d.calls||[]));if(!d.ok)fail(d.error.code,d.error);
     return d.result;
   }
@@ -446,9 +447,29 @@ async (input) => {
   }
   const workflow=workflowFactory({input,api,fail,full,selectScope,inspectOrCheck,control,transitions,
     getUpload:()=>uploadReceipt,setUpload:r=>uploadReceipt=r});
+  const analysisRunning=status=>['generating','catalog_confirmed','frames_confirmed','processing'].includes(status);
+  async function observeAnalysis(deadline){
+    let previous=null,delay=input.interval*1000;
+    do{
+      const state=await api('GET',B+'/analysis/status');
+      if(state.stale||!analysisRunning(state.status))return state;
+      if(performance.now()>=deadline)return state;
+      const key=JSON.stringify([state.status,state.progress]);
+      delay=key===previous?Math.min(delay*1.5,input.interval*3000,15000):input.interval*1000;
+      previous=key;
+      await new Promise(resolve=>setTimeout(resolve,Math.min(delay,Math.max(0,deadline-performance.now()))));
+    }while(true);
+  }
   async function run(){
     if(!['grading','check'].includes(stopAfter))fail('invalid_stop_after');
     const readonly=await control({resume:input.plan?.resume_authorized===true});if(readonly)return readonly;
+    if(input.observe_analysis){
+      const observed=await observeAnalysis(executionDeadline);
+      if(observed.stale)return {outcome:'source_stale',submitted:false};
+      if(analysisRunning(observed.status))return {outcome:'waiting',waiting_for:'analysis',analysis_status:observed.status,progress:observed.progress,submitted:false};
+      // Re-enter through current guards and authoritative state before any write.
+      const changed=await control();if(changed)return changed;
+    }
     const batch=await api('GET',B);
     if(!['scan','grading'].includes(batch.workflow_mode))return {outcome:'unsupported_workflow',submitted:false};
     if(stopAfter==='grading'&&batch.workflow_mode!=='grading')fail('grading_endpoint_requires_grading');
@@ -478,7 +499,7 @@ async (input) => {
       await api('POST',B+'/analysis',{reference_student_id:reference});transitions.push({action:'analysis_started'});
       a=await full();
     }
-    const deadline=performance.now()+input.timeout*1000;
+    const deadline=executionDeadline;
     const visited=new Set();
     for(let n=0;n<25;n++){
       if(a.status==='awaiting_frames'){
@@ -487,13 +508,10 @@ async (input) => {
         if(!input.plan?.frames)return {outcome:'needs_frame_review',review:snapshot(batch,a),submitted:false};
         await apply(batch,a,input.plan.frames,true);a=await full();
       }else if(['generating','catalog_confirmed','frames_confirmed','processing'].includes(a.status)){
-        let state;
-        do{
-          state=await api('GET',B+'/analysis/status');
-          if(!['generating','catalog_confirmed','frames_confirmed','processing'].includes(state.status))break;
-          if(performance.now()>=deadline)return {outcome:'waiting',analysis_status:state.status,progress:state.progress,submitted:false};
-          await new Promise(resolve=>setTimeout(resolve,input.interval*1000));
-        }while(true);
+        const state=await observeAnalysis(deadline);
+        if(state.stale)return {outcome:'source_stale',submitted:false};
+        if(analysisRunning(state.status))return {outcome:'waiting',waiting_for:'analysis',analysis_status:state.status,progress:state.progress,submitted:false};
+        const changed=await control();if(changed)return changed;
         a=await full();
       }else if(a.status==='awaiting_confirmation'){
         if(input.plan?.catalog){

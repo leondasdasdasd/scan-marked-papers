@@ -112,6 +112,8 @@ collect不访问浏览器、不重新执行或再次验证业务，校验布尔o
 
 emit即使带--follow也只运行一轮timeout预算，不持续后台跟进；waiting先collect再生成下一轮，不重复启动。各轮沿用该阶段本轮墙钟累计预算（默认600秒，可按用户明确需要调整），不每轮重置；这不是CLI emit已实现的全局预算。正常running且进度暂不变本身不是失败证据，沿预算等待，只有明确重复错误或不可恢复诊断才提前停止。到限交付“处理中/检查未完成”、进度、链接与原checkpoint，下次续原batch，不无限轮询、重传或假报ready，不按固定轮数判失败。
 
+正常 `run --follow` 跨 waiting 续接时，若上轮已明确分析活跃，内部观察保留 imports/task control 检查，稳定阶段省去重复 batch/catalog 读取；阶段变化后再次检查 control 并作权威读取才继续。此优化不新增 CLI 开关，不改变写前保护或 emit 跨轮管理。状态与进度相同时，等待间隔以1.5倍退避，上限为 `min(3*interval,15秒)`；进度变化回到 interval，睡眠不越过单轮 deadline。分析与媒体共享执行 deadline；Python follow 每轮 timeout 仅取剩余 max-seconds。业务 HTTP 在途仍可能使实际墙钟超过预算，这些预算不是硬超时或服务端完成承诺，减少轮询也不证明真实处理更快。
+
 emit 结果已 collect 且有本地原 PDF 时，可直接复用元数据生成校对包，无须再读浏览器：
 
 ```bash

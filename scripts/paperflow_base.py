@@ -93,6 +93,7 @@ JS = r"""async (input) => {
       let check=await api('POST',B+'/lesson-practice/preflight',{
         revision:cfg.config.revision,allow_pending_formula_protocol:false});
       const started=performance.now();
+      const deadline=input.deadline??started+input.timeout*1000;
       let preparationStatus=null;
       const mediaPending=(check.issues||[]).some(i=>['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)&&i.severity==='pending');
       const hardFailure=(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity));
@@ -100,15 +101,15 @@ JS = r"""async (input) => {
         const existing=await api('GET',B+'/lesson-practice/progress');
         if(existing.preparation?.status!=='running')
           await api('POST',B+'/lesson-practice/progress/start',{revision:cfg.config.revision});
-        while(performance.now()-started<input.timeout*1000) {
+        do {
           const p=await api('GET',B+'/lesson-practice/progress');
           const state=p.preparation?.status;preparationStatus=state||null;
           if(state==='awaiting_confirmation') {
             break;
           }
-          if(['blocked','failed','paused'].includes(state)||performance.now()-started>=input.timeout*1000) break;
-          await new Promise(resolve=>setTimeout(resolve,input.interval*1000));
-        }
+          if(['blocked','failed','paused'].includes(state)||performance.now()>=deadline) break;
+          await new Promise(resolve=>setTimeout(resolve,Math.min(input.interval*1000,Math.max(0,deadline-performance.now()))));
+        }while(performance.now()<deadline);
         const latest=await api('GET',B+'/lesson-practice/config');
         check=await api('POST',B+'/lesson-practice/preflight',{
           revision:latest.config.revision,allow_pending_formula_protocol:false});

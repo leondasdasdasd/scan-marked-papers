@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Batch frame edits and advance a scan to its next review or preflight boundary."""
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -117,7 +118,7 @@ def request_payload(args,action,plan=None,checkpoint=None):
     if checkpoint and (checkpoint.get('origin')!=args.base_url or args.batch_id and checkpoint.get('batch_id')!=args.batch_id):
         raise ValueError('checkpoint_origin_or_batch_mismatch')
     payload={'action':action,'origin':args.base_url,'batch':args.batch_id,'timeout':args.timeout,
-             'interval':args.interval,'checkpoint':checkpoint,'plan':plan,'confirm':getattr(args,'confirm',False),'authorize_sync':getattr(args,'authorize_sync',False)}
+             'interval':args.interval,'observe_analysis':getattr(args,'observe_analysis',False),'checkpoint':checkpoint,'plan':plan,'confirm':getattr(args,'confirm',False),'authorize_sync':getattr(args,'authorize_sync',False)}
     if action=='run':
         stop_after=getattr(args,'stop_after',None) or checkpoint.get('stop_after','check')
         if stop_after not in ('grading','check'):raise ValueError('invalid_stop_after')
@@ -463,6 +464,8 @@ def main():
             print(json.dumps(emitted,ensure_ascii=False))
             return 0
         started=time.monotonic()
+        execution_args=copy.copy(args)
+        if args.action=='run' and args.follow:execution_args.timeout=min(args.timeout,args.max_seconds)
         if args.action=='review' and args.metadata:
             metadata=json.loads(args.metadata.read_text())
             if isinstance(metadata,dict) and isinstance(metadata.get('result'),dict):metadata=metadata['result']
@@ -479,7 +482,7 @@ def main():
                 raise ValueError('checkpoint_origin_or_batch_mismatch')
             if args.checkpoint:atomic_json(args.checkpoint,cp)
         else:
-            data=execute(args,'snapshot' if args.action=='review' else args.action,plan)
+            data=execute(execution_args,'snapshot' if args.action=='review' else args.action,plan)
         if args.action=='run' and args.follow:
             calls=list(data.get('calls',[]));transitions=list(data.get('transitions',[]))
             while data.get('ok') and data.get('result',{}).get('outcome')=='waiting' and time.monotonic()-started<args.max_seconds:
@@ -488,7 +491,10 @@ def main():
                 if time.monotonic()-started>=args.max_seconds:break
                 print(json.dumps({'outcome':'waiting','analysis_status':data['result'].get('analysis_status'),
                                   'elapsed_seconds':round(time.monotonic()-started,1)},ensure_ascii=False),file=sys.stderr,flush=True)
-                data=execute(args,'run',plan,data.get('checkpoint'))
+                execution_args=copy.copy(args)
+                execution_args.timeout=min(args.timeout,max(.001,args.max_seconds-(time.monotonic()-started)))
+                execution_args.observe_analysis=(data['result'].get('analysis_status') in ('generating','catalog_confirmed','frames_confirmed','processing') and data['result'].get('waiting_for') not in ('grading','grading_stop','task_stop','media'))
+                data=execute(execution_args,'run',plan,data.get('checkpoint'))
                 calls.extend(data.get('calls',[]));transitions.extend(data.get('transitions',[]))
             data['calls']=calls;data['transitions']=transitions
             data['follow_seconds']=round(time.monotonic()-started,3)
