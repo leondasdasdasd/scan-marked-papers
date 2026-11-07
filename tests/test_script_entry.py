@@ -7,6 +7,7 @@ import sys
 import tempfile
 import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
@@ -36,6 +37,57 @@ class ScriptEntryTests(unittest.TestCase):
             self.assertIn('engine_not_loaded',text)
             self.assertEqual(script.stat().st_mode & 0o777, 0o600)
 
+
+    def test_upload_checkpoint_resumes_batch_and_reference_without_extra_plan_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cp=Path(directory)/'upload.json';step=Path(directory)/'step.js'
+            cp.write_text(json.dumps({'origin':'https://example.test','batch_id':'abc',
+                'upload_receipt':{'state':'completed','key':'original-key'}}))
+            with patch.object(paperflow.base,'browser',side_effect=AssertionError('must not execute')):
+                code,data=self.run_cli(['--base-url','https://example.test','--checkpoint',str(cp),
+                    '--emit-script',str(step),'run','--reference-paper','paper-1'])
+            self.assertEqual(code,0)
+            self.assertEqual(data['result']['batch_id'],'abc')
+            self.assertIn('"reference_student_id": "paper-1"',step.read_text())
+            self.assertEqual(json.loads(cp.read_text())['upload_receipt']['key'],'original-key')
+            before=cp.read_bytes()
+            with contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
+                self.run_cli(['--base-url','https://other.test','--checkpoint',str(cp),
+                    '--emit-script',str(step),'run'])
+            self.assertEqual(cp.read_bytes(),before)
+
+    def test_missing_direct_cli_preserves_undispatched_upload_for_same_key_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);cp=root/'checkpoint.json'
+            args=SimpleNamespace(base_url='https://example.test',batch_id='',checkpoint=cp,
+                browser_session='offline-missing-cli-regression',browser_backend='playwright',
+                playwright_cli=root/'missing.js',wrapper='/unused',file=root/'source.pdf',
+                timeout=1,interval=2)
+            plan={'key':'stable-test-key','sha256':'a'*64,'fields':{'workflow_mode':'scan'}}
+            data=paperflow.execute(args,'upload',plan)
+            self.assertFalse(data['ok'])
+            self.assertEqual(data['error']['code'],'existing_playwright_cli_unavailable')
+            self.assertEqual(json.loads(cp.read_text())['upload_receipt']['state'],'prepared')
+            retry=paperflow.request_payload(args,'upload',plan)
+            self.assertTrue(retry['upload_first_dispatch'])
+            with patch.object(paperflow.base,'browser',return_value={
+                    'ok':False,'error':{'code':'transport_uncertain'}}):
+                paperflow.execute(args,'upload',plan,{'origin':args.base_url,'batch_id':'',
+                    'upload_receipt':{**retry['checkpoint']['upload_receipt'],'state':'prepared'}})
+            self.assertEqual(json.loads(cp.read_text())['upload_receipt']['state'],'dispatching')
+
+    def test_reference_conflict_and_missing_plan_fail_without_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan=Path(directory)/'plan.json';plan.write_text('{"reference_student_id":"old"}')
+            args=['--base-url','https://example.test','--batch-id','abc','--browser-session','test','run']
+            with patch.object(paperflow.base,'browser',side_effect=AssertionError('must not execute')):
+                code,data=self.run_cli([*args,'--plan',str(plan),'--reference-paper','new'])
+                self.assertEqual(code,1)
+                self.assertEqual(data['error']['code'],'reference_plan_conflict')
+                code,data=self.run_cli([*args,'--plan','{"reference_student_id":"new"}'])
+                self.assertEqual(code,1)
+                self.assertEqual(data['error']['code'],'plan_file_not_found')
+
     def test_cached_engine_executes_repeated_small_steps_without_business_page_actions(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);step=root/'step.js'
@@ -54,6 +106,32 @@ console.log(JSON.stringify({step_bytes:Buffer.byteLength(step),requests}));})();
             result=subprocess.run(['node','-',str(step),str(engine)],input=runner,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertLess(json.loads(result.stdout)['step_bytes'],3000)
+
+    def test_sync_evaluate_dispatch_is_idempotent_until_completion_and_recoverable_after_bootstrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            step=Path(directory)/'access.js'
+            code,data=self.run_cli(['--base-url','https://example.test','--emit-script',str(step),
+                '--sync-evaluate','classes'])
+            self.assertEqual(code,0)
+            engine=Path(data['result']['engine_file']);poll=Path(data['result']['poll_file'])
+            runner=r"""
+const fs=require('fs');const assert=require('assert/strict');global.location={origin:'https://example.test'};
+let requests=0;global.fetch=async()=>{requests++;await new Promise(r=>setTimeout(r,20));return {ok:true,status:200,json:async()=>({semester_id:'1',classes:[]})};};
+(async()=>{const step=fs.readFileSync(process.argv[2],'utf8'),poll=fs.readFileSync(process.argv[4],'utf8');
+assert.equal(eval(poll).error.code,'browser_step_missing');
+assert.equal(eval(step).result.outcome,'browser_step_started');await new Promise(r=>setTimeout(r,5));
+assert.equal(eval(poll).error.code,'engine_not_loaded');assert.equal(requests,0);
+eval(fs.readFileSync(process.argv[3],'utf8'));
+assert.equal(eval(step).result.outcome,'browser_step_started');
+assert.equal(eval(step).result.outcome,'browser_step_running');
+assert.equal(eval(poll).result.outcome,'browser_step_running');await new Promise(r=>setTimeout(r,50));
+assert.equal(eval(poll).result.outcome,'class_directory');assert.equal(eval(step).result.outcome,'class_directory');
+assert.equal(requests,1);console.log('one request across repeated synchronous dispatch and polling');})();
+"""
+            proc=subprocess.run(['node','-',str(step),str(engine),str(poll)],input=runner,text=True,capture_output=True,timeout=10)
+            self.assertEqual(proc.returncode,0,proc.stdout+proc.stderr)
+            self.assertEqual(poll.stat().st_mode & 0o777,0o600)
+            self.assertLess(len(poll.read_bytes()),1000)
 
     def test_run_endpoint_survives_emit_recovery_and_can_be_explicitly_updated(self):
         with tempfile.TemporaryDirectory() as directory:

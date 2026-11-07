@@ -56,6 +56,19 @@ class BrowserBackendTests(unittest.TestCase):
             self.assertFalse(result['ok'])
             self.assertNotIn('private token',json.dumps(result))
 
+    def test_existing_node_cli_uses_same_session_without_npx_or_wrapper(self):
+        cli=self.root/'existing cli.js'
+        cli.write_text('const fs=require("fs");fs.writeFileSync('+json.dumps(str(self.record))+',JSON.stringify(process.argv.slice(2)));console.log("### Result\\n"+JSON.stringify({ok:true,result:{outcome:"access_verified"}}));')
+        self.args.browser_backend='playwright';self.args.playwright_cli=cli
+        self.args.wrapper=str(self.root/'must never be run')
+        result=base.browser(self.args,'async(page)=>42','unused')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['result']['outcome'],'access_verified')
+        self.assertEqual(json.loads(self.record.read_text()),['-s=teacher-test','run-code','async(page)=>42'])
+        cli.unlink()
+        result=base.browser(self.args,'unused','unused')
+        self.assertEqual(result['error']['code'],'existing_playwright_cli_unavailable')
+
     def test_default_origin_is_internal_and_override_is_preserved(self):
         for extra,expected in [([],base.DEFAULT_ORIGIN),(['--base-url','https://example.test'],'https://example.test')]:
             argv=['paperflow',*extra,'--batch-id','test','--browser-session','teacher','inspect']

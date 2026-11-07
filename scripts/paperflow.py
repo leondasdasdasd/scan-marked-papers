@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -71,6 +72,12 @@ def execute(args,action,plan=None,checkpoint=None):
         result={'ok':False,'error':{'code':'browser_backend_unavailable','retryable':False,'next_action':'use_emit_script'}}
     except (OSError,subprocess.TimeoutExpired):
         result={'ok':False,'error':{'code':'transport_uncertain','retryable':False,'next_action':'read_state_before_retry'}}
+    if (action=='upload' and payload.get('upload_first_dispatch') and
+            result.get('error',{}).get('code')=='existing_playwright_cli_unavailable'):
+        # This explicit local precheck failed before any browser or HTTP dispatch.
+        cp=payload['checkpoint']
+        cp['upload_receipt']={**cp['upload_receipt'],'state':'prepared'}
+        result['checkpoint']=cp
     if args.checkpoint and result.get('checkpoint'):atomic_json(args.checkpoint,result['checkpoint'])
     return result
 
@@ -115,36 +122,68 @@ def compact(data):
 
 
 def render_bundle(metadata,pdf_path,out):
-    import pymupdf
-    from PIL import Image,ImageDraw
+    try:
+        import pymupdf
+        from PIL import Image,ImageDraw
+    except ImportError:
+        raise ValueError('review_dependency_unavailable') from None
     if hashlib.sha256(pdf_path.read_bytes()).hexdigest()!=metadata.get('source_pdf_sha256'):
         raise ValueError('source_pdf_hash_mismatch')
     out.mkdir(parents=True,exist_ok=True);os.chmod(out,0o700)
     frames=metadata['frames'];start=metadata['reference_start'];count=metadata['pages_per_paper']
-    images=[];files=[]
+    images=[];files=[];index=[];sheets=[]
     with pymupdf.open(pdf_path) as doc:
-        if start+count>len(doc):raise ValueError('reference_page_out_of_range')
-        # Each original page is decoded exactly once; every crop uses that image.
+        if start<0 or count<1 or start+count>len(doc):raise ValueError('reference_page_out_of_range')
+        # Decode each original page once; supply raw, overview and bounded detail views.
         for relative in range(count):
             pix=doc[start+relative].get_pixmap(matrix=pymupdf.Matrix(2,2))
             image=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
-            marked=image.copy();draw=ImageDraw.Draw(marked)
+            raw=out/f'raw-page-{relative+1}.png';image.save(raw);files.append(raw.name)
+            marked=image.copy();draw=ImageDraw.Draw(marked);details=[]
             for f in frames:
                 for region in f['regions']:
                     if region['page']!=relative:continue
                     b=region['bbox'];box=(round(b[0]*image.width),round(b[1]*image.height),round(b[2]*image.width),round(b[3]*image.height))
+                    if not (0<=box[0]<box[2]<=image.width and 0<=box[1]<box[3]<=image.height):
+                        raise ValueError('invalid_review_bbox')
+                    number=len(index)+1
                     draw.rectangle(box,outline='#e00000',width=3)
-                    draw.text((box[0]+3,box[1]+3),f['label'],fill='#d00000',stroke_width=1,stroke_fill='white')
-                    crop=image.crop(box);crop.thumbnail((600,230));images.append((f['label'],crop))
+                    draw.text((box[0]+3,box[1]+3),str(number),fill='#d00000',stroke_width=1,stroke_fill='white')
+                    crop=image.crop(box);crop.thumbnail((600,230));images.append((str(number),crop))
+                    # Context outside the box makes truncated stems/options visible.
+                    margin=round(min(image.size)*.02)
+                    context=(max(0,box[0]-margin),max(0,box[1]-margin),min(image.width,box[2]+margin),min(image.height,box[3]+margin))
+                    detail=image.crop(context);dd=ImageDraw.Draw(detail)
+                    dd.rectangle((box[0]-context[0],box[1]-context[1],box[2]-context[0]-1,box[3]-context[1]-1),outline='#e00000',width=3)
+                    detail.thumbnail((780,430))
+                    entry={'number':number,'frame_id':f['id'],'label':f['label'],
+                        'parent_id':f.get('parent_id'),'page':relative,'pdf_page':start+relative+1,'bbox':b}
+                    index.append(entry);details.append((entry,detail))
             path=out/f'reference-page-{relative+1}.png';marked.save(path);files.append(path.name)
+            for offset in range(0,len(details),6):
+                chunk=details[offset:offset+6];rows=[]
+                for i in range(0,len(chunk),2):rows.append(max(im.height for _,im in chunk[i:i+2])+38)
+                sheet=Image.new('RGB',(1600,sum(rows)),'#eeeeee');sd=ImageDraw.Draw(sheet);y=0
+                name=f'frame-crops-page-{relative+1}-{offset//6+1}.png'
+                for i,(entry,detail) in enumerate(chunk):
+                    if i and i%2==0:y+=rows[i//2-1]
+                    x=(i%2)*800
+                    sd.text((x+10,y+5),f"#{entry['number']} {entry['frame_id']} PDF {entry['pdf_page']}",fill='black')
+                    sheet.paste(detail,(x+10,y+30));entry['image_file']=name
+                sheet.save(out/name);files.append(name);sheets.append(name)
     if images:
+        # Compatibility overview; detail sheets avoid shrinking an entire long sheet.
         sheet=Image.new('RGB',(1240,270*((len(images)+1)//2)),'#eeeeee');draw=ImageDraw.Draw(sheet)
         for i,(label,image) in enumerate(images):
             x=(i%2)*620;y=(i//2)*270;draw.text((x+10,y+5),label,fill='black');sheet.paste(image,(x+10,y+25))
         sheet.save(out/'contact-sheet.png');files.append('contact-sheet.png')
-    manifest={**metadata,'reviewed':False,'image_files':files,'decoded_pages':count,'crop_count':len(images)}
+    binding={k:metadata.get(k) for k in ('batch_id','source_pdf_sha256','frame_revision','reference_student_id')}
+    atomic_json(out/'frame-index.json',{**binding,'reviewed':False,'frames':index})
+    manifest={**metadata,'reviewed':False,'image_files':files,'detail_sheets':sheets,
+        'frame_index':'frame-index.json','decoded_pages':count,'crop_count':len(images)}
     atomic_json(out/'review.json',manifest)
-    return {'manifest':str(out/'review.json'),'images':files,'decoded_pages':count,'crops':len(images),'reviewed':False}
+    return {'manifest':str(out/'review.json'),'images':files,'detail_sheets':sheets,
+        'frame_index':str(out/'frame-index.json'),'decoded_pages':count,'crops':len(images),'reviewed':False}
 
 
 def main():
@@ -154,6 +193,7 @@ def main():
     parser.add_argument('--browser-session')
     parser.add_argument('--emit-script',type=Path)
     parser.add_argument('--standalone-script',action='store_true')
+    parser.add_argument('--sync-evaluate',action='store_true')
     parser.add_argument('--wrapper',default=str(Path.home()/'.codex/skills/playwright/scripts/playwright_cli.sh'))
     base.browser_options(parser)
     parser.add_argument('--timeout',type=int,default=45);parser.add_argument('--interval',type=int,default=5)
@@ -175,15 +215,19 @@ def main():
         p=sub.add_parser(name);p.add_argument('--source',choices=('teaching','general'),default='teaching')
         p.add_argument('--grade');p.add_argument('--subject-id');p.add_argument('--course-id')
         if name=='class-students':p.add_argument('--class-id',required=True)
+    p=sub.add_parser('prepare');p.add_argument('--file',type=Path,required=True);p.add_argument('--pages-per-paper',type=int)
+    p.add_argument('--read-timeout',type=float,default=10)
     p=sub.add_parser('upload');p.add_argument('--file',type=Path,required=True);p.add_argument('--pages-per-paper',type=int,required=True)
     p.add_argument('--key',required=True);p.add_argument('--workflow',choices=('scan','grading'),default='scan')
     p.add_argument('--engine',choices=('llm','xueersi','doubao'),default='llm');p.add_argument('--model',default='qwen3.8-max')
     p.add_argument('--has-answer-paper',action='store_true');p.add_argument('--paper-size',choices=('A4','A3'),default='A4')
     p.add_argument('--orientation',choices=('portrait','landscape'),default='portrait');p.add_argument('--paper-sides',choices=('single','double'),default='single')
     p.add_argument('--full-scan',action='store_true');p.add_argument('--analysis-fast',action='store_true')
+    p.add_argument('--read-timeout',type=float,default=10)
     p.add_argument('--scope-plan',type=Path);p.add_argument('--file-input-selector',default='#paperflow-upload')
     p=sub.add_parser('run');p.add_argument('--plan',type=Path)
     p.add_argument('--stop-after',choices=('grading','check'))
+    p.add_argument('--reference-paper',help='ID of the actually reviewed reference paper; avoids a one-field plan file')
     p.add_argument('--review-pdf',type=Path);p.add_argument('--review-out',type=Path)
     p.add_argument('--follow',action='store_true');p.add_argument('--max-seconds',type=int,default=600)
     p=sub.add_parser('snapshot');p.add_argument('--output',type=Path,dest='snapshot_output')
@@ -208,10 +252,25 @@ def main():
             parser.error('batch URL conflicts with origin or batch id')
         args.base_url=origin;args.batch_id=match[1]
     args.base_url=(args.base_url or base.DEFAULT_ORIGIN).rstrip('/')
+    if args.action=='prepare':
+        if not 0.1<=args.read_timeout<=60:parser.error('read-timeout 0.1..60')
+        result=upload.prepare(args)
+        if args.output:atomic_json(args.output,result)
+        print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
+    if args.action=='upload' and not 0.1<=args.read_timeout<=60:parser.error('read-timeout 0.1..60')
     if args.action=='api-list':
         contracts=json.loads((ROOT/'api_contracts.json').read_text())
         if args.operation:contracts['operations']=[o for o in contracts['operations'] if o['name']==args.operation]
         print(json.dumps(contracts,ensure_ascii=False));return 0 if contracts['operations'] else 1
+    # Upload already records the batch identity; reuse that bound checkpoint.
+    if not args.batch_id and args.checkpoint and args.checkpoint.is_file():
+        try:
+            saved=json.loads(args.checkpoint.read_text())
+            if not isinstance(saved,dict):raise ValueError()
+        except (OSError,ValueError):parser.error('invalid checkpoint file')
+        if saved.get('origin')!=args.base_url:parser.error('checkpoint origin conflicts with base URL')
+        args.batch_id=saved.get('batch_id') or ''
+        if not isinstance(args.batch_id,str):parser.error('invalid checkpoint batch id')
     batch_optional=args.action in ('upload','classes','class-students','access','relogin','api-call','collect',
                                   'session-connect','session-status','session-close')
     if not args.batch_id and not batch_optional:parser.error('batch-id or batch-url required')
@@ -241,7 +300,13 @@ def main():
         print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
     try:
         plan_path=getattr(args,'plan',None) or getattr(args,'edits',None)
+        if plan_path and not plan_path.is_file():raise ValueError('plan_file_not_found')
         plan=json.loads(plan_path.read_text()) if plan_path else None
+        if args.action=='run' and args.reference_paper:
+            if plan is not None and not isinstance(plan,dict):raise ValueError('invalid_run_plan')
+            if plan and plan.get('reference_student_id') not in (None,args.reference_paper):
+                raise ValueError('reference_plan_conflict')
+            plan={**(plan or {}),'reference_student_id':args.reference_paper}
         if args.action=='api-call':plan={**(plan or {}),'operation':args.operation}
         if args.action in ('classes','class-students'):
             plan={k:getattr(args,k) for k in ('source','grade','subject_id','course_id') if getattr(args,k) is not None}
@@ -262,6 +327,16 @@ def main():
                 engine_file.write_text(bootstrap,encoding='utf-8');os.chmod(engine_file,0o600)
                 script='(async()=>{const input='+json.dumps(payload,ensure_ascii=False)+';const engine=globalThis['+json.dumps(engine_id)+'];if(typeof engine!=="function"){const checkpoint={origin:input.origin,batch_id:input.batch,...input.checkpoint};if(input.action==="upload"&&input.upload_first_dispatch&&checkpoint.upload_receipt?.state==="dispatching")checkpoint.upload_receipt={...checkpoint.upload_receipt,state:"prepared"};return {ok:false,error:{code:"engine_not_loaded",next_action:"evaluate_bootstrap_file"},calls:[],checkpoint};}return await engine(input);})()'
                 engine_info={'engine_file':str(engine_file),'engine_id':engine_id,'engine_load_required_if_missing':True}
+            if args.sync_evaluate:
+                job_id='__paperflow_job_'+secrets.token_hex(12)
+                # Some product evaluate hosts serialize a Promise instead of awaiting it.
+                # The retained job makes repeated dispatch of this same file idempotent.
+                wrapped='(()=>{const key='+json.dumps(job_id)+';let existing=globalThis[key];if(existing?.state==="completed"&&existing.result?.error?.code==="engine_not_loaded"){delete globalThis[key];existing=null;}if(existing)return existing.state==="completed"?existing.result:{ok:true,result:{outcome:"browser_step_running",job_id:key}};const job={state:"running"};Object.defineProperty(globalThis,key,{value:job,configurable:true});Promise.resolve().then(()=>('+script+')).then(result=>{job.result=result;job.state="completed";},()=>{job.result={ok:false,error:{code:"browser_step_failed",next_action:"read_state_before_retry"}};job.state="completed";});return {ok:true,result:{outcome:"browser_step_started",job_id:key}};})()'
+                poll_file=args.emit_script.with_name(args.emit_script.stem+'-poll.js')
+                poll='(()=>{const job=globalThis['+json.dumps(job_id)+'];if(!job)return {ok:false,error:{code:"browser_step_missing",next_action:"read_state_before_retry"}};return job.state==="completed"?job.result:{ok:true,result:{outcome:"browser_step_running",job_id:'+json.dumps(job_id)+'}};})()'
+                poll_file.write_text(poll,encoding='utf-8');os.chmod(poll_file,0o600)
+                script=wrapped
+                engine_info.update(poll_file=str(poll_file),job_id=job_id,evaluate_mode='synchronous_dispatch')
             args.emit_script.write_text(script,encoding='utf-8');os.chmod(args.emit_script,0o600)
             emitted={'ok':True,'result':{'outcome':'browser_script_created',
                 'script_file':str(args.emit_script),'origin':args.base_url,'batch_id':args.batch_id,

@@ -3,6 +3,7 @@
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -166,6 +167,7 @@ DEFAULT_ORIGIN = 'https://piyue.yungu.org'
 
 
 def browser_options(parser):
+    parser.add_argument('--playwright-cli',type=Path)
     parser.add_argument('--browser-backend', choices=('playwright','agent-browser','isolated'), default='playwright')
     parser.add_argument('--browser-executable', default='agent-browser')
 
@@ -196,8 +198,15 @@ def browser(args, code, expression=None):
             return {'ok':False,'error':{'code':'invalid_browser_response'}}
         data['wall_seconds']=round(time.perf_counter()-started,3)
         return data
-    proc = subprocess.run([args.wrapper, '-s='+args.browser_session, 'run-code', code],
-                          capture_output=True, text=True, timeout=args.timeout+65)
+    cli = getattr(args, 'playwright_cli', None)
+    if cli:
+        node = shutil.which('node')
+        if not node or not cli.is_file():
+            return {'ok':False,'error':{'code':'existing_playwright_cli_unavailable'}}
+        command = [node, str(cli), '-s='+args.browser_session, 'run-code', code]
+    else:
+        command = [args.wrapper, '-s='+args.browser_session, 'run-code', code]
+    proc = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout+65)
     match = re.search(r'### Result\s*\n(.*?)(?=\n### |\Z)', proc.stdout, re.S)
     if not match:
         return {'ok':False,'error':{'code':'browser_command_failed'},'wall_seconds':round(time.perf_counter()-started,3)}

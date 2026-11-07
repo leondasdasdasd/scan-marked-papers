@@ -136,6 +136,16 @@ async (input) => {
         if(op.regions)f.regions=clone(op.regions);
         if(op.label!==undefined)f.label=String(op.label);
         f.source='manual';
+      }else if(op.type==='replace_page'){
+        if(!Number.isInteger(op.page)||op.page<0||op.page>=pages||
+          !Array.isArray(op.frames)||!op.frames.length)fail('invalid_page_replacement');
+        const affected=result.filter(f=>f.regions.some(r=>r.page===op.page));
+        if(affected.some(f=>f.regions.some(r=>r.page!==op.page)))fail('cross_page_frame_requires_explicit_edit');
+        if(op.frames.some(f=>!f||f.parent_id||!Array.isArray(f.regions)||
+          !f.regions.length||f.regions.some(r=>r.page!==op.page)))fail('independent_page_frames_required');
+        const replacement=op.frames.map(f=>({...clone(f),parent_id:null,source:'manual'}));
+        validate(replacement,pages);
+        result=result.filter(f=>!affected.includes(f));result.push(...replacement);
       }else if(op.type==='shift'){
         if(!Array.isArray(op.ids)||!op.ids.length||![op.dx,op.dy].every(Number.isFinite))fail('invalid_shift');
         for(const id of op.ids){const f=result.find(f=>f.id===id);if(!f)fail('frame_not_found');
@@ -186,7 +196,7 @@ async (input) => {
         reference_student_id:a.reference_student_id,after_revision:next.frame_revision,frames_signature:signature(next.frames),
         edit_signature:JSON.stringify(plan.operations),
         expected_leaf_labels:plan.expected_leaf_labels,
-        independent_labels:plan.operations.filter(op=>['split','promote_children'].includes(op.type)).flatMap(op=>op.children.map(f=>f.label))};
+        independent_labels:plan.operations.flatMap(op=>['split','promote_children'].includes(op.type)?op.children.map(f=>f.label):op.type==='replace_page'?op.frames.map(f=>f.label):[])};
       transitions.push({action:'frames_saved',edited_operations:plan.operations.length,frames:next.frames.length});
     }
     if(confirm&&next.status==='awaiting_frames'){

@@ -78,6 +78,28 @@ test('9 edits are validated before one write and six independent business questi
  assert(retry.ok&&retry.result.ready&&retry.result.expected_granularity_verified);assert.equal(w.patches,1);assert.equal(w.starts,0);
  assert(w.trace.slice(before).every(([m])=>m==='GET'||m==='POST'));
 });
+test('manual missing-page recovery preserves other-page frames and records independent roots',async()=>{
+ const w=world();w.batch.pages_per_paper=2;w.batch.total_pages=4;
+ w.a.frames=[frame('back','back')];w.a.frames[0].regions[0].page=1;
+ const original=clone(w.a.frames[0]);const p=plan(w);p.reviewed_pages=[0,1];
+ const added=Array.from({length:6},(_,i)=>frame('manual'+i,'calc'+i,[.1,.1+i*.1,.8,.19+i*.1]));
+ p.operations=[{type:'replace_page',page:0,frames:added}];p.expected_leaf_labels=['back',...added.map(f=>f.label)];
+ const d=await main(input('frames',{plan:p}));assert(d.ok,JSON.stringify(d));assert.equal(w.patches,1);
+ assert.deepEqual(w.a.frames.find(f=>f.id==='back'),original);
+ assert(w.a.frames.filter(f=>f.id.startsWith('manual')).every(f=>f.parent_id===null));
+ assert.deepEqual(d.checkpoint.frame_receipt.independent_labels,added.map(f=>f.label));
+ const again=await main(input('frames',{plan:p,checkpoint:d.checkpoint}));assert(again.ok);assert.equal(w.patches,1);
+});
+test('a page replacement with a container or cross-page existing frame makes zero writes',async()=>{
+ for(const kind of ['container','cross_page']){
+  const w=world();w.batch.pages_per_paper=2;const p=plan(w);p.reviewed_pages=[0,1];
+  const row=frame('new','calc');if(kind==='container')row.parent_id='old-container';
+  else w.a.frames[0].regions.push({page:1,bbox:[.1,.1,.2,.2]});
+  p.operations=[{type:'replace_page',page:0,frames:[row]}];
+  const d=await main(input('frames',{plan:p}));assert(!d.ok);assert.equal(w.patches,0);
+  assert.equal(d.error.code,kind==='container'?'independent_page_frames_required':'cross_page_frame_requires_explicit_edit');
+ }
+});
 test('expired frame revision gives zero writes',async()=>{
  const w=world(),p=plan(w);p.frame_revision='expired';const d=await main(input('frames',{plan:p}));
  assert.equal(d.error.code,'version_conflict');assert.equal(w.patches,0);
