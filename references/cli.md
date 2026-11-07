@@ -62,6 +62,10 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --brows
 
 同 origin、同 browser-session 已有独立会话缓存时，正常浏览器 CLI 优先使用它，包括默认 playwright 或显式 agent-browser，不再操作老师的页面；隔离会话失效会返回诊断，不静默改用用户页。emit 是独立的脚本生成路径，仍交给实际授权的同源 evaluate 宿主，不自动执行或完成迁移。带 `--metadata` 的 `review` 离线渲染与 `collect` 不要求 browser-session，`review`/`collect` 均不支持 emit。不带 metadata 的 review 仍从浏览器读取 snapshot，需要真实会话。主入口和兼容 `paperflow_base.py` 的正常浏览器后端均支持 isolated/playwright/agent-browser；session-*、batch-url、emit、collect 等命令以主入口 `paperflow.py` 为准。
 
+### 尚无任务浏览器时启动现有运行时
+
+已有活跃任务会话不重新打开。尚无可用命名会话时，可用 `python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --browser-session <本轮任务名> browser-open`，支持全局 `--wrapper`/`--playwright-cli`，以及子命令 `--executable <已有浏览器绝对路径>`。默认云 wrapper 且已有 Docker 可用时，命令只读探查容器 `/ms-playwright` 下现成 Chromium，使用任务级受限临时配置选择已有最高版本，完成、异常或超时均清理；自定义 wrapper/direct CLI 不擅自探 Docker。不安装运行时、不改共享配置、不迁移凭证；打开页面不证明登录，之后用 access 核验，真实失败按诊断采用现成可用方式。doctor 保持离线，不启动浏览器。
+
 ### 独立会话的确定性接入
 
 已有本轮可用后端与任务会话就直接 access；尚未确定路径时才尝试一次连接，不扫描或测试全部后端。任务会话名由智能体选取（1–80 个字母、数字、下划线或连字符），沿用已核实 origin，不让老师填写技术参数。
@@ -83,7 +87,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --brows
 
 连接脚本只读取适用于目标 origin 的必要登录 Cookie，在受控进程内存中核实来源教师与学校；目标使用新隔离上下文，仅把 `SESSION` 缩为目标 host，建立新的 `paper_session`，不复制源 `paper_session`。只有目标教师、学校和身份与来源一致，且真实 `/api/classroom/login-check` 有效，才返回 `isolated_session_connected`。上游 SESSION 仍受实际有效期和撤销规则约束，独立上下文不延长登录授权。这只是登录核验，不扩展课程、班级、批次或同步授权；实际请求仍受服务端权限、学校范围和业务版本校验。
 
-Cookie、令牌、授权链接不进入模型、聊天、stdout/stderr、计划、checkpoint 或导出文件，也不生成 storage state。受限控制记录保存在系统用户缓存目录的 `scan-marked-papers-sessions` 下，按 origin 和任务会话名定位，仅含身份与独立浏览器控制信息；目录 0700、记录 0600，不放进项目、技能包或交付材料。后续命令沿用同一任务名，使用 `session-status` 检查 `connected=true`；仍需 `access` 核实本次实际业务会话。
+Cookie、令牌、授权链接不进入模型、聊天、stdout/stderr、计划、checkpoint 或导出文件，也不生成 storage state。受限控制记录保存在系统用户缓存目录的 `scan-marked-papers-sessions` 下，按 origin 和任务会话名定位，仅含身份与独立浏览器控制信息；目录 0700、记录 0600，不放进项目、技能包或交付材料。session-connect/status/close 同样遵从全局 `--output` 保存去凭证回执。后续命令沿用同一任务名，使用 `session-status` 检查 `connected=true`；仍需 `access` 核实本次实际业务会话。
 
 ```bash
 python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --browser-session <本次任务名> session-status
@@ -152,6 +156,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 | --- | --- |
 | `doctor [--read-timeout 10]` | 离线校验完整 manifest、已有 Python 依赖与所选浏览器入口；无需 PDF/batch/session，不更新安装联网或启动浏览器，不验证业务执行与鉴权 |
 | `prepare --file <PDF> [--pages-per-paper N] [--read-timeout 10]` | 首次材料有界读取与本地能力摘要；离线、无 batch/会话，不认证浏览器，不重复运行 |
+| `browser-open [--executable <已有浏览器绝对路径>]` | 尚无任务会话时用已有 Playwright 运行时打开命名会话；不安装、不迁移认证、不证明登录，随后 access；已有活跃会话不重开 |
 | `session-connect [--source-url <CDP入口>] [--source-target <ID>] [--target-url <独立CDP入口>] [--executable <已有浏览器路径>]` | 复用已核验独立会话，或定点内存迁移必要登录态；不操作源页面、不导出凭证；需全局 browser-session，无需 batch |
 | `session-status` | 核验本次独立上下文、同一身份及课堂会话，读 connected/outcome；不以 ok=true 代替 connected=true |
 | `session-close` | 仅注销目标应用会话并清理本次上下文/自建浏览器，不跟随全局退出、不关闭源浏览器 |
@@ -320,12 +325,16 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 | `isolated_session_missing`、`isolated_session_closed`、`isolated_session_expired` | 独立会话缺失或失效；先 session-status 核实，尝试一次 session-connect 续接原身份；无能力则保留恢复点，不静默回退用户页面或重放写请求 |
 | `isolated_cleanup_incomplete` | 本次目标上下文/自建浏览器或临时目录清理未完成；保留控制记录，以原任务名 session-close 重试，不手删记录、不关源浏览器 |
 | `invalid_api_response` | 返回不是有效业务响应；按 read_state_before_retry 先只读查当前状态，不重放写请求 |
+| `batch_not_found` | 本批接口 404 且原文“考试不存在或已删除”；按 verify_existing_batch_link 核实原链接，不猜路由或盲查已删 ID；其他 404 不据此推断 |
+| `classroom_scope_required` | 本批 start 的 POST 422 且原文“请先选择年级、学科、课程和班级”；按 select_verified_classroom_scope 核实并保存本次真实范围，不自动选班或重试 |
 | `contract_mismatch` | 核对真实部署响应与当前参考，必要时用页面，不猜路由或翻压缩源码 |
 | `analysis_status_updating` | 仅上述精确状态GET/503/原文组合适用观察器内有限只读恢复；到限保留诊断与原checkpoint，不延长原预算、不重启任务，不据此承诺服务端或端到端提速 |
 | `rate_limited` | 按服务端提示有界等待后只读核对，不紧循环重放写 |
 | `transport_uncertain` | 请求可能已送达，先读状态与持久化结果，不能直接重发 |
 
 `access` 只读 `/api/session?refresh_profile=false&include_models=false` 和 `/api/classroom/login-check`，返回 `access_verified`、`classroom_login_required` 或 `authentication_unverified`，以及 principal 的 user_id/school_id/identity 和 classroom_valid。它仍受真实权限校验，也不证明模型可用，模型能力只在所需阶段检查；checkpoint.auth_receipt 仅保存非敏感 principal 与 recovery_started，不存 CAS URL，后续 `identity_changed` 时停止写入。
+
+登录输入须抑制可能回显字段值的操作输出；填入凭证后不执行 snapshot、截图或输出表单值，登录完成后再核验身份。凭证不进入模型、日志或产物；清理本轮可能含凭证的临时快照，保留其他任务文件。
 
 确切课堂失效诊断的 next_action 为 `check_access_then_relogin`。`relogin` 使用既有 `POST /api/login?force=true&return_to=<本批次路径>`，login_url 仅在浏览器内存保留并延迟导航，不进入输出、checkpoint 或日志；使用独立会话时恢复导航也只在该上下文执行，不去老师的源页面操作。emit 生成不导航，evaluate 执行后才导航。`authentication_navigation_started` 仅表示导航启动；`authentication_navigation_deferred` 表示页面有弹窗或焦点编辑，先保留用户未保存草稿；`authentication_recovery_pending` 表示已启动恢复，不再重复登录。回到原 origin 后用 access 验证同一教师、学校及有效课堂会话，再只读当前业务状态后续做；不自动重放写请求。一次恢复仍无效就保留原 batch 与阻塞，不翻源码、猜刷新入口或循环重登，也不据此断言配置故障。
 

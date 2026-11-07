@@ -363,6 +363,7 @@ def main():
     parser.add_argument('--verbose',action='store_true')
     sub=parser.add_subparsers(dest='action',required=True)
     for name in ('inspect','check','diagnose','usage','access','relogin','roster'):sub.add_parser(name)
+    p=sub.add_parser('browser-open');p.add_argument('--executable')
     p=sub.add_parser('session-connect')
     p.add_argument('--source-url');p.add_argument('--source-target')
     p.add_argument('--target-url');p.add_argument('--executable')
@@ -446,12 +447,13 @@ def main():
         args.batch_id=saved.get('batch_id') or ''
         if not isinstance(args.batch_id,str):parser.error('invalid checkpoint batch id')
     batch_optional=args.action in ('upload','classes','class-students','access','relogin','api-call','collect',
-                                  'session-connect','session-status','session-close')
+                                  'session-connect','session-status','session-close','browser-open')
     if not args.batch_id and not batch_optional:parser.error('batch-id or batch-url required')
     args.batch_id=args.batch_id or ''
     if args.action=='upload' and not args.checkpoint:parser.error('upload requires checkpoint')
     if not args.browser_session and not args.emit_script and args.action!='collect' and not (args.action=='review' and args.metadata):parser.error('browser-session required for browser backend')
     if args.emit_script and args.action in ('review','collect'):parser.error('emit-script requires a browser action')
+    if args.emit_script and args.action=='browser-open':parser.error('browser-open requires a native Playwright backend')
     url=urlsplit(args.base_url)
     if url.scheme not in ('http','https') or not url.netloc or url.path or url.username or url.password or url.query or url.fragment:
         parser.error('base-url must be an origin')
@@ -478,6 +480,12 @@ def main():
             print(json.dumps({'skill_update':updated},ensure_ascii=False),file=sys.stderr)
     if args.action in ('session-connect','session-status','session-close'):
         result=paperflow_session.invoke(args,args.action.removeprefix('session-'))
+        if args.output:atomic_json(args.output,result)
+        print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
+    if args.action=='browser-open':
+        from paperflow_browser import open_browser
+        result=open_browser(args)
+        if args.output:atomic_json(args.output,result)
         print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
     try:
         plan_path=getattr(args,'plan',None) or getattr(args,'edits',None)

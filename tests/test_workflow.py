@@ -475,6 +475,21 @@ test('run returns media waiting for CLI follow without restarting an existing pr
  }finally{global.performance=oldPerformance;}
 });
 
+test('deleted batch is distinct from unknown routes and missing scope does not cause a retry or selection',async()=>{
+ for(const [message,expected] of [['考试不存在或已删除','batch_not_found'],['route unavailable','contract_mismatch']]){
+  const w=world(),original=global.fetch;
+  global.fetch=async(path,o)=>path===B+'/roster'?reply({detail:message},404):original(path,o);
+  const d=await main(input('api-call',{plan:{operation:'roster'}}));
+  assert(!d.ok);assert.equal(d.error.code,expected);assert.equal(d.calls.length,1);assert.equal(d.calls[0].method,'GET');
+ }
+ const w=world();w.batch.workflow_mode='grading';w.batch.grading_engine='xueersi';
+ const original=global.fetch;let starts=0;
+ global.fetch=async(path,o)=>{if(path===B+'/start'){starts++;return reply({detail:'请先选择年级、学科、课程和班级'},422);}return original(path,o);};
+ const d=await main(input('api-call',{plan:{operation:'grading-start',evidence_confirmed:true,evidence_note:'authorized original batch'}}));
+ assert(!d.ok);assert.equal(d.error.code,'classroom_scope_required');assert.equal(d.error.next_action,'select_verified_classroom_scope');
+ assert.equal(starts,1);assert(w.trace.every(([method])=>method==='GET'));
+});
+
 (async()=>{let failed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+' '+e.message);}}console.log(JSON.stringify({tests:tests.length,passed:tests.length-failed,failed}));process.exitCode=failed?1:0;})();
 '''
 
