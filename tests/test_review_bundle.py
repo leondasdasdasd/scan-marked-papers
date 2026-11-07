@@ -100,5 +100,18 @@ class ReviewBundleTests(unittest.TestCase):
                 render_bundle(metadata,path,out)
             self.assertFalse(out.exists())
 
+    def test_fallback_preserves_source_rejection_diagnostic(self):
+        import builtins
+        from unittest.mock import patch
+        original_import=builtins.__import__
+        def without_renderer(name,*args,**kwargs):
+            if name=='pymupdf':raise ModuleNotFoundError('fixture')
+            return original_import(name,*args,**kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            path,metadata=self.fixture(directory);metadata['source_pdf_sha256']='wrong';out=Path(directory)/'review'
+            with patch('builtins.__import__',side_effect=without_renderer),patch('paperflow_runtime.python_candidates',return_value=iter((Path(sys.executable),))):
+                with self.assertRaisesRegex(ValueError,'source_pdf_hash_mismatch'):render_bundle(metadata,path,out)
+            self.assertFalse(out.exists())
+
 
 if __name__=='__main__':unittest.main()

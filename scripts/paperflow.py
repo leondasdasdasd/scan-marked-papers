@@ -30,15 +30,18 @@ def atomic_json(path,data):
 
 
 
-def validate_file_paths(args):
+def validate_file_paths(args,generated_outputs=()):
     """Reject aliases before any output, checkpoint or update can overwrite input."""
     inputs=('plan','edits','scope_plan','metadata','result','file','pdf','review_pdf')
     outputs=('output','checkpoint','snapshot_output','emit_script')
     paths=[(name,Path(value),name in outputs) for name in (*inputs,*outputs)
            if (value:=getattr(args,name,None)) is not None]
+    generated=[('generated',Path(value),True) for value in generated_outputs]
+    paths.extend(generated)
     # atomic_json also writes a temporary sibling before replacing its target.
     paths.extend((name+'_temporary',path.with_name(path.name+'.tmp'),True)
-                 for name,path,_ in list(paths) if name in ('output','checkpoint','snapshot_output'))
+                 for name,path,_ in list(paths) if name in ('output','checkpoint','snapshot_output') or
+                 name=='generated' and path.suffix=='.json')
     for index,(name,path,writes) in enumerate(paths):
         for other_name,other,other_writes in paths[:index]:
             if not (writes or other_writes):continue
@@ -202,22 +205,48 @@ def compact(data):
     return result
 
 
+def review_output_paths(metadata,out):
+    paths=[out/'review.json',out/'frame-index.json']
+    has_crops=False
+    for relative in range(metadata.get('pages_per_paper',0)):
+        paths.extend((out/f'raw-page-{relative+1}.png',out/f'reference-page-{relative+1}.png'))
+        crops=sum(region['page']==relative for frame in metadata.get('frames',[]) for region in frame['regions'])
+        has_crops=has_crops or crops>0
+        paths.extend(out/f'frame-crops-page-{relative+1}-{sheet+1}.png' for sheet in range((crops+5)//6))
+    if has_crops:paths.append(out/'contact-sheet.png')
+    return paths
+
+
 def render_bundle(metadata,pdf_path,out,allow_fallback=True):
+    validate_file_paths(argparse.Namespace(pdf=pdf_path),review_output_paths(metadata,out))
     try:
         import pymupdf
         from PIL import Image,ImageDraw
     except ImportError:
         if allow_fallback:
             from paperflow_runtime import python_candidates
-            worker="import sys,json;sys.path.insert(0,sys.argv[1]);from paperflow import render_bundle;from pathlib import Path;d=json.load(sys.stdin);print(json.dumps(render_bundle(d['metadata'],Path(d['pdf']),Path(d['out']),allow_fallback=False)))"
+            worker="""import sys,json
+sys.path.insert(0,sys.argv[1])
+from paperflow import render_bundle,local_error
+from pathlib import Path
+d=json.load(sys.stdin)
+try:print(json.dumps({'ok':True,'result':render_bundle(d['metadata'],Path(d['pdf']),Path(d['out']),allow_fallback=False)}))
+except Exception as exc:print(json.dumps(local_error(exc)))
+"""
             for python in python_candidates():
                 try:
                     result=subprocess.run([str(python),'-c',worker,str(ROOT)],
                         input=json.dumps({'metadata':metadata,'pdf':str(pdf_path.absolute()),'out':str(out.absolute())}),
                         capture_output=True,text=True,timeout=120,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
                     if result.returncode==0:
-                        data=json.loads(result.stdout);data['renderer_python']=str(python);return data
-                    if 'review_dependency_unavailable' not in result.stderr:raise ValueError('review_render_failed')
+                        response=json.loads(result.stdout)
+                        if response.get('ok'):
+                            data=response['result'];data['renderer_python']=str(python);return data
+                        code=response.get('error',{}).get('code')
+                        if code=='review_dependency_unavailable':continue
+                        raise ValueError(code if code in ('source_pdf_hash_mismatch','reference_page_out_of_range',
+                            'invalid_review_bbox','file_path_conflict') else 'review_render_failed')
+                    raise ValueError('review_render_failed')
                 except subprocess.TimeoutExpired:raise ValueError('review_render_timeout') from None
                 except OSError:continue
         raise ValueError('review_dependency_unavailable') from None
@@ -404,6 +433,13 @@ def main():
     if not 1<=args.timeout<=180 or not 2<=args.interval<=30:parser.error('invalid timeout/interval')
     if args.action=='run' and bool(args.review_pdf)!=bool(args.review_out):parser.error('review-pdf and review-out must be provided together')
     if args.action=='run' and not 1<=args.max_seconds<=3600:parser.error('max-seconds 1..3600')
+    if args.emit_script:
+        engine_source=source();engine_id='__paperflow_'+hashlib.sha256(engine_source.encode()).hexdigest()[:20]
+        engine_file=None if args.standalone_script else args.emit_script.with_name('paperflow-engine-'+engine_id.removeprefix('__paperflow_')+'.js')
+        poll_file=args.emit_script.with_name(args.emit_script.stem+'-poll.js') if args.sync_evaluate else None
+        try:validate_file_paths(args,[path for path in (engine_file,poll_file) if path is not None])
+        except (OSError,ValueError) as exc:
+            print(json.dumps(local_error(exc),ensure_ascii=False));return 1
     if __name__=='__main__' and args.action not in ('api-list','collect','session-status','session-close') and not (args.action=='review' and args.metadata):
         try:updated=skill_update.ensure(ROOT.parent)
         except Exception:updated={'outcome':'update_failed','error':'update_check_unavailable','updated':False}
@@ -435,13 +471,11 @@ def main():
         validate_frame_plan(args.action,plan)
         if args.emit_script:
             payload=request_payload(args,args.action,plan)
-            engine_source=source();engine_id='__paperflow_'+hashlib.sha256(engine_source.encode()).hexdigest()[:20]
             args.emit_script.parent.mkdir(parents=True,exist_ok=True)
             engine_info={}
             if args.standalone_script:
                 script='('+engine_source+')('+json.dumps(payload,ensure_ascii=False)+')'
             else:
-                engine_file=args.emit_script.with_name('paperflow-engine-'+engine_id.removeprefix('__paperflow_')+'.js')
                 bootstrap='(()=>{if(location.origin!=='+json.dumps(args.base_url)+')return {ok:false,error:{code:"origin_mismatch"}};Object.defineProperty(globalThis,'+json.dumps(engine_id)+',{value:('+engine_source+'),configurable:true});return {ok:true,result:{outcome:"engine_loaded",engine_id:'+json.dumps(engine_id)+'}};})()'
                 engine_file.write_text(bootstrap,encoding='utf-8');os.chmod(engine_file,0o600)
                 script='(async()=>{const input='+json.dumps(payload,ensure_ascii=False)+';const engine=globalThis['+json.dumps(engine_id)+'];if(typeof engine!=="function"){const checkpoint={origin:input.origin,batch_id:input.batch,...input.checkpoint};if(input.action==="upload"&&input.upload_first_dispatch&&checkpoint.upload_receipt?.state==="dispatching")checkpoint.upload_receipt={...checkpoint.upload_receipt,state:"prepared"};return {ok:false,error:{code:"engine_not_loaded",next_action:"evaluate_bootstrap_file"},calls:[],checkpoint};}return await engine(input);})()'
@@ -451,7 +485,6 @@ def main():
                 # Some product evaluate hosts serialize a Promise instead of awaiting it.
                 # The retained job makes repeated dispatch of this same file idempotent.
                 wrapped='(()=>{const key='+json.dumps(job_id)+';let existing=globalThis[key];if(existing?.state==="completed"&&existing.result?.error?.code==="engine_not_loaded"){delete globalThis[key];existing=null;}if(existing)return existing.state==="completed"?existing.result:{ok:true,result:{outcome:"browser_step_running",job_id:key}};const job={state:"running"};Object.defineProperty(globalThis,key,{value:job,configurable:true});Promise.resolve().then(()=>('+script+')).then(result=>{job.result=result;job.state="completed";},()=>{job.result={ok:false,error:{code:"browser_step_failed",next_action:"read_state_before_retry"}};job.state="completed";});return {ok:true,result:{outcome:"browser_step_started",job_id:key}};})()'
-                poll_file=args.emit_script.with_name(args.emit_script.stem+'-poll.js')
                 poll='(()=>{const job=globalThis['+json.dumps(job_id)+'];if(!job)return {ok:false,error:{code:"browser_step_missing",next_action:"read_state_before_retry"}};return job.state==="completed"?job.result:{ok:true,result:{outcome:"browser_step_running",job_id:'+json.dumps(job_id)+'}};})()'
                 poll_file.write_text(poll,encoding='utf-8');os.chmod(poll_file,0o600)
                 script=wrapped
@@ -500,12 +533,17 @@ def main():
             data['follow_seconds']=round(time.monotonic()-started,3)
             data['wall_seconds']=round(time.monotonic()-started,3)
         if args.action=='run' and args.review_pdf and data.get('ok') and data['result'].get('review'):
+            validate_file_paths(args,review_output_paths(data['result']['review'],args.review_out))
             data['result']['review_bundle']=render_bundle(data['result']['review'],args.review_pdf,args.review_out)
-        if args.action=='review' and data.get('ok'):data['result']=render_bundle(data['result'],args.pdf,args.out)
+        if args.action=='review' and data.get('ok'):
+            validate_file_paths(args,review_output_paths(data['result'],args.out))
+            data['result']=render_bundle(data['result'],args.pdf,args.out)
         if args.action=='snapshot' and args.snapshot_output and data.get('ok'):
             atomic_json(args.snapshot_output,data['result']);data['snapshot_file']=str(args.snapshot_output)
     except Exception as exc:
         data=local_error(exc)
+        if data.get('error',{}).get('code')=='file_path_conflict':
+            print(json.dumps(data,ensure_ascii=False));return 1
     if args.output:
         atomic_json(args.output,data)
     shown=data if args.verbose else compact(data)

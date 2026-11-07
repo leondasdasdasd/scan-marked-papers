@@ -128,7 +128,11 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 
 同一输出目录的图包缓存绑定 batch、原 PDF SHA、frame_revision、参考卷及其起始页、每份页数、frames 和渲染器版本。`review.json` 的 `render_key` 相同且图像及 index 文件的 `file_sha256` 全部校验通过时，返回 `cache_hit=true`、`decoded_pages=0`。题框或 revision 变化须重建叠框图；仅原 PDF、参考卷、页范围一致且原页文件哈希完好时复用原页解码，回执以 `raw_pages_reused` 表示。文件损坏则重建，不沿用旧图包。缓存与新生成产物均为 `reviewed=false`，不继承其他智能体的审图结论；当前智能体仍须实际核对原页、逐框联系图和全参考页覆盖。
 
-输入计划、全局 output、snapshot 输出和 checkpoint 使用不同文件路径，避免输出覆盖输入；相对/绝对写法或符号链接指向同一文件也不能复用。默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
+输入计划、全局 output、snapshot 输出和 checkpoint 使用不同文件路径；emit 派生的 engine/poll、review 的全部图像/index/JSON资产及 JSON 临时兄弟文件也不得覆盖本次 PDF、metadata、checkpoint、output 等输入输出。相同路径、相对/绝对等价路径及软硬链接碰撞返回 `file_path_conflict`；emit 在 checkpoint 写入前校验，冲突时不向冲突 output 写错误回执。合法的同图包缓存复用仍可使用，不为避冲突删除原件。
+
+备用 Python 审图保留 `source_pdf_hash_mismatch`、`reference_page_out_of_range`、`invalid_review_bbox`、`file_path_conflict` 的具体诊断，其余渲染失败概括为 `review_render_failed`；按实际错误处理，不将所有失败推断为依赖缺失。
+
+默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
 
 `ok`/退出码只说明工具执行，业务完成看outcome、completion、remaining、顶层ready/submitted与真实全批覆盖，不只取原始preflight.ready。upload经FormData创建，scan/grading均由run按已选终点推进；只批改看grading_completed/grading_incomplete与原始全批覆盖，不要求ready；原生文件工具只向接口环境注入PDF，不默认点击上传表单。旧兼容入口的能力以自身help为准，不据此限制主入口的新命令。
 

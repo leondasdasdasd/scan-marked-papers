@@ -1,7 +1,7 @@
 ---
 name: scan-marked-papers
 metadata:
-  version: "1.10.8"
+  version: "1.10.9"
 description: 在批阅台按教师选择处理 PDF 或已有记录链接：扫描已批试卷或批改未批试卷，并按选择整理题目、检查或同步课堂；支持续做、独立计算题拆分、学生关联与复核。
 ---
 
