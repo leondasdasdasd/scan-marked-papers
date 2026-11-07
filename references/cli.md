@@ -118,9 +118,13 @@ emit 结果已 collect 且有本地原 PDF 时，可直接复用元数据生成�
 python3 <技能目录>/scripts/paperflow.py --batch-url <本次记录链接> review --metadata <受控目录/result.json> --pdf <本次原PDF> --out <受控目录/review>
 ```
 
-metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 result.review；必须匹配本次 batch_id，并严格核验原 PDF SHA。校对包输出原页、按参考相对页分组且每张最多6框/限高分页的带上下文逐框联系图，以及frame-index.json；索引绑定source_pdf_sha256与frame_revision，用于定位原页、题框和联系图。所有生成结果始终reviewed=false，不自动认定QA通过，也不继承其他智能体已审。review_dependency_unavailable表示当前执行环境无可用渲染依赖，复用已验证的现成Python或同SHA/frame_revision的现成图包，不自动安装；不能仅凭local_execution_failed错误名推断缺依赖或权限。当前智能体实际核对原页和逐框联系图；来源与题框版本未变时复用已生成证据，仅具体未决异常补定位图，一次汇总修改后核验受影响框及全页覆盖，无新异常不重复渲染、放大或裁剪。
+metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 result.review；必须匹配本次 batch_id，并严格核验原 PDF SHA。校对包输出原页、按参考相对页分组且每张最多6框/限高分页的带上下文逐框联系图，以及frame-index.json；索引绑定source_pdf_sha256与frame_revision，用于定位原页、题框和联系图。所有生成结果始终reviewed=false，不自动认定QA通过，也不继承其他智能体已审。review_dependency_unavailable表示当前执行环境无可用渲染依赖，复用已验证的现成Python或同SHA/frame_revision的现成图包，不自动安装；不能仅凭local_execution_failed错误名推断缺依赖或权限。当前智能体实际核对原页和逐框联系图；来源、题框版本及 frames 均未变时复用本轮已生成图证，不继承其他智能体的审图结论；仅具体未决异常补定位图，一次汇总修改后核验受影响框及全页覆盖，无新异常不重复渲染、放大或裁剪。
 
-默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
+当前 Python 缺少 pymupdf/Pillow 时，审图执行按顺序尝试已有可执行的 `PAPERFLOW_PYTHON`、`VIRTUAL_ENV/bin/python`、任务 cwd 及其祖先目录中的 `.venv/bin/python` 或 `venv/bin/python`，本地 worker 上限120秒；不扫描全机、不安装依赖。单个解释器缺依赖不代表任务已有环境均不可用；这些路径均不可用时才按真实诊断保留缺口，不重复换读法。
+
+同一输出目录的图包缓存绑定 batch、原 PDF SHA、frame_revision、参考卷及其起始页、每份页数、frames 和渲染器版本。`review.json` 的 `render_key` 相同且图像及 index 文件的 `file_sha256` 全部校验通过时，返回 `cache_hit=true`、`decoded_pages=0`。题框或 revision 变化须重建叠框图；仅原 PDF、参考卷、页范围一致且原页文件哈希完好时复用原页解码，回执以 `raw_pages_reused` 表示。文件损坏则重建，不沿用旧图包。缓存与新生成产物均为 `reviewed=false`，不继承其他智能体的审图结论；当前智能体仍须实际核对原页、逐框联系图和全参考页覆盖。
+
+输入计划、全局 output、snapshot 输出和 checkpoint 使用不同文件路径，避免输出覆盖输入；相对/绝对写法或符号链接指向同一文件也不能复用。默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
 
 `ok`/退出码只说明工具执行，业务完成看outcome、completion、remaining、顶层ready/submitted与真实全批覆盖，不只取原始preflight.ready。upload经FormData创建，scan/grading均由run按已选终点推进；只批改看grading_completed/grading_incomplete与原始全批覆盖，不要求ready；原生文件工具只向接口环境注入PDF，不默认点击上传表单。旧兼容入口的能力以自身help为准，不据此限制主入口的新命令。
 
@@ -157,7 +161,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 
 ## 目录、上传与文件注入
 
-先access，再用classes读取本次真实目录；teaching使用教学课程，general按grade、subject-id、course-id逐级读取。class-students使用同一组scope参数核对允许班级名单。多候选需用户决定时集中问业务选择，不让老师填写ID或工具参数。
+先 access；课堂会话失效先完成一次 relogin 恢复并重新 access 验证，再用 classes 读取本次真实目录。复用已返回且符合本次选择的 source/course/semester 等精确参数，不重做无过滤查询、不猜 ID；teaching使用教学课程，general按grade、subject-id、course-id逐级读取。class-students使用同一组scope参数核对允许班级名单。多候选需用户决定时集中问业务选择，不让老师填写ID或工具参数。
 
 scope计划与run.scope结构相同：当前revision、semester_id、class_ids、scope对象及evidence_confirmed/evidence_note。scope.source为teaching或general；general还须真实grade/subject_id/course_id。现有批次先读roster取revision；新上传可给`--scope-plan <JSON>`，工具在创建或恢复原batch后读取它的当前revision再绑定，不把旧batch版本套到新记录。保存后回读名单与范围，录入后不擅换班。
 
@@ -199,7 +203,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 
 ## 按返回边界推进
 
-先 access 核验身份、学校和课堂会话，再 run --follow（emit 单轮执行/collect），复用校对包、计划与已有诊断。等待和序列化交给内置工具，不逐轮 snapshot/roster；失败且能力未变不重复探测或写新恢复计划。仅缺少具体契约时补当前help/api-list与[对应条目](api.md)，可执行阶段继续，真实阻塞保留原checkpoint；只在阶段变化、阻塞或交付时简报。
+先 access 核验身份、学校和课堂会话，再用单个有界 run --follow 跟进并接收结果（emit 单轮执行/collect），同浏览器会话有活跃命令时不并行导航或启动另一条 run；外层读取进程输出不等于业务轮询。复用校对包、计划与已有诊断。等待和序列化交给内置工具，不逐轮 snapshot/roster；失败且能力未变不重复探测或写新恢复计划。仅缺少具体契约时补当前help/api-list与[对应条目](api.md)，可执行阶段继续，真实阻塞保留原checkpoint；只在阶段变化、阻塞或交付时简报。
 
 | 返回边界 | 智能体下一步 |
 | --- | --- |
@@ -208,7 +212,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 | `needs_grading_recovery`、`needs_analysis_recovery` | 按真实failed/诊断定位原批改或后续整理缺口，分别采用适用的定点恢复计划，不切模式、重跑done或把部分范围当完成 |
 | `needs_precut_recovery` | 读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
 | `needs_frame_review` | 复用 run 生成的 review 包，实际核对全部参考页，一次整理必要框修改，再应用并确认。没有包且已有本地原 PDF 时才单独 review，已有元数据优先 --metadata 离线复用；已有链接无本地 PDF 时按原技能读取参考页，不索要或重传原卷 |
-| `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先用catalog-save-draft/review接口保存并回读新版本，实际审完后用catalog --plan确认，再run |
+| `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先集中修改并用 catalog-save-draft/catalog-save-review 保存一次，回读新版本与实际任务状态，历史 ready 作废；实际审完后用catalog --plan确认，再run |
 | `needs_targeted_recovery`、partial/failed 或检查阻塞 | 先读具体失败与 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |
 | `needs_duplicate_review` | 本次范围存在重复学生卷；依据真实证据确定取舍，按当前范围确认契约处理，不自动任选、不提交确认 |
 | `identity_pending` | 全批仍有未关联卷；复用 roster 对账定位，清楚身份有证据才整包关联，模糊者直接暂留。保留 remaining 中媒体/结构/范围等其他未完成项，不把 subset ready 或补姓名当作全批通过 |
@@ -229,7 +233,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --check
 
 复杂计划仍用 `--plan <JSON文件路径>`，不传 inline JSON；路径不存在返回 `plan_file_not_found`。run 计划根可传 `reference_student_id` 与 `scope`。scope 含实时 revision、semester_id、class_ids、scope 对象、`evidence_confirmed=true` 和非空 evidence_note，仅写已核实的课程/班级与本次授权范围。工具核对当前集合，相同可复用，不同才按当前 roster revision 更新；服务端仍负责权限校验。已有参考不为追求更高正确率重开全批，无证据不造百分比。
 
-**题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
+**题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。第一次保存前集中逐页逐框审清完整题干、全部选项、分数上下界、公共说明、作答空间与批注归属，不以统一 padding 代替边界判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
 
 operations 支持：
 
@@ -246,7 +250,7 @@ operation = {"type": "replace_page", "page": 0, "frames": reviewed_page_0_frames
 
 将此项放入上述完整计划后执行 `frames --edits <补页计划.json>`；实际审阅已覆盖全部参考页且确认无误时才可加 `--confirm`。保存仍核对当前revision、来源、参考卷及全页审阅契约，操作回执防止重复写入；新框标签进入后续独立业务题粒度核对。成功后简单回读真实框与状态，不重复提交同一几何数据或重新预切。
 
-`frames --confirm` 或 run 计划根的 frames 使用同一计划。run 根还可有 scope、associations、expected_leaf_labels、reference_reviewed。确认后仍可能停在目录待审，不代替目录保存或 merge-preflight/confirm-and-start。
+`frames --confirm` 或 run 计划根的 frames 使用同一计划。run 根还可有 scope、associations、expected_leaf_labels、reference_reviewed。当前部分服务在 frames 确认后以 `catalog_confirmation.kind=confirmed_frames` 自动确认目录并启动全批，不存在可保证的目录先审中间门；去掉 follow 或虚构 stop-after catalog 不能暂停服务端。仅服务端实际返回 awaiting_confirmation 时才走 needs_catalog_review 与 catalog 确认。目录保存可能触发全批重新处理，须读取真实状态并重新全批 check，不沿用历史 ready、不声称仅重算修改题。
 
 **独立计算题。** N个独立算式最终必须是N道可分别查看/订正的业务叶题，不是N框仍一题、N个空或组合题。填写真实expected_leaf_labels，CLI保存并续验粒度目标；核对叶题标签/数量、parent_id=null，排除content.children、composite/virtual_parent、is_composite/isComposite、business_question.isComposite及题型目录isComposite所代表的合题，且无额外父标题题。expected_granularity_verified只是程序核对，不能替代实际目录与必要图证核验。
 
@@ -310,6 +314,6 @@ checkpoint 仅作恢复定位与有限回执，保存 origin/batch_id、题框�
 
 超时、PATCH 成功但回执丢失、确认超时或顺序关联部分失败，先读取当前状态/版本与实际保存内容，再做剩余步骤；不能重发整个 shift 包。409 回读版本后重新判断，不强改 token/revision；范围确认无用户变化却再次同因 409，按主文保留证据并停止自动循环。partial/failed 只恢复失败范围，stale 先核来源，不删除用户数据重来。
 
-最终检查必须保留整批总数、实际覆盖与未覆盖数。读 `completion` 的阶段布尔及 media_pending、`remaining` 按错误类别与严重程度汇总的身份/结构/范围/媒体计数；`roster_coverage_gap` 不代表身份完整，原始 preflight.ready 可能仅覆盖平台当前已关联 subset。整体通过看顶层 ready/outcome 及全批覆盖，姓名未关联、结构不完整、范围不足或媒体 pending 时，全批仍未通过，不改 scope 求 ready，也不能说手动补姓名即可全量通过。报告区分“已执行检查，未通过/未完成”与“全批检查通过，尚未同步”，如实列出所有剩余项。保留教师原判与 `JUDGMENT_BINARY_MAPPING` 等真实警告，不为消警告改判。检查模式禁止 imports POST、确认同步与提交型 resume；最新全批 ready 且必要核验完成后，给真实批阅台链接、统计、warnings 和验证边界即停止，不自启全量深审。
+最终直接 check；无具体定位需要时不先重复 inspect。最终检查必须保留整批总数、实际覆盖与未覆盖数。读 `completion` 的阶段布尔及 media_pending、`remaining` 按错误类别与严重程度汇总的身份/结构/范围/媒体计数；`roster_coverage_gap` 不代表身份完整，原始 preflight.ready 可能仅覆盖平台当前已关联 subset。整体通过看顶层 ready/outcome 及全批覆盖，姓名未关联、结构不完整、范围不足或媒体 pending 时，全批仍未通过，不改 scope 求 ready，也不能说手动补姓名即可全量通过。报告区分“已执行检查，未通过/未完成”与“全批检查通过，尚未同步”，如实列出所有剩余项。保留教师原判与 `JUDGMENT_BINARY_MAPPING` 等真实警告，不为消警告改判。检查模式禁止 imports POST、确认同步与提交型 resume；最新全批 ready 且必要核验完成后，给真实批阅台链接、统计、warnings 和验证边界即停止，不自启全量深审。
 
 计划、完整结果、校对图和证据只在本次受控目录使用，不写凭证或学生答案全文到交付报告。报告区分服务端并发任务时长与墙钟耗时；模型 usage 缺失就是未知，不能当零。隔离回放复用旧产物时明确“无新模型调用”，只证明该环境的编排表现，不推断新卷识别质量、真实线上全流程速度或 token 节省。

@@ -56,10 +56,41 @@ class ReviewBundleTests(unittest.TestCase):
             return original_import(name,*args,**kwargs)
         with tempfile.TemporaryDirectory() as directory:
             out=Path(directory)/'review'
-            with patch('builtins.__import__',side_effect=without_renderer):
+            with patch('builtins.__import__',side_effect=without_renderer), patch('paperflow_runtime.python_candidates',return_value=iter(())):
                 with self.assertRaisesRegex(ValueError,'review_dependency_unavailable'):
                     render_bundle({},Path(directory)/'absent.pdf',out)
             self.assertFalse(out.exists())
+
+    def test_identical_bundle_reuses_images_and_never_approves_review(self):
+        from unittest.mock import patch
+        import pymupdf
+        with tempfile.TemporaryDirectory() as directory:
+            pdf,metadata=self.fixture(directory);out=Path(directory)/'review'
+            render_bundle(metadata,pdf,out)
+            before={p.name:p.stat().st_mtime_ns for p in out.glob('*.png')}
+            with patch.object(pymupdf,'open',side_effect=AssertionError('must not decode')):
+                result=render_bundle(metadata,pdf,out)
+            self.assertTrue(result['cache_hit']);self.assertEqual(result['decoded_pages'],0)
+            self.assertFalse(result['reviewed']);self.assertEqual(before,{p.name:p.stat().st_mtime_ns for p in out.glob('*.png')})
+
+    def test_changed_frames_reuse_raw_page_but_rebuild_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf,metadata=self.fixture(directory);out=Path(directory)/'review'
+            render_bundle(metadata,pdf,out);raw=(out/'raw-page-1.png').read_bytes()
+            metadata['frame_revision']='rev-2';metadata['frames'][0]['regions'][0]['bbox']=[.2,.02,.9,.1]
+            result=render_bundle(metadata,pdf,out)
+            self.assertFalse(result['cache_hit']);self.assertEqual(result['decoded_pages'],0)
+            self.assertEqual(result['raw_pages_reused'],1);self.assertEqual(raw,(out/'raw-page-1.png').read_bytes())
+            index=json.loads((out/'frame-index.json').read_text())
+            self.assertEqual(index['frame_revision'],'rev-2');self.assertEqual(index['frames'][0]['bbox'],[.2,.02,.9,.1])
+
+    def test_corrupted_cached_image_is_rebuilt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf,metadata=self.fixture(directory);out=Path(directory)/'review'
+            render_bundle(metadata,pdf,out);image=out/'raw-page-1.png';original=image.read_bytes();image.write_bytes(b'bad')
+            result=render_bundle(metadata,pdf,out)
+            self.assertFalse(result['cache_hit']);self.assertEqual(result['decoded_pages'],1)
+            self.assertEqual(image.read_bytes(),original)
 
     def test_wrong_source_is_rejected_before_creating_bundle(self):
         with tempfile.TemporaryDirectory() as directory:

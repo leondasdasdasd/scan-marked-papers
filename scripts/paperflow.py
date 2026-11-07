@@ -3,6 +3,8 @@
 import argparse
 import hashlib
 import json
+import math
+import re
 import os
 import secrets
 import subprocess
@@ -24,6 +26,83 @@ def atomic_json(path,data):
     tmp=path.with_name(path.name+'.tmp')
     with tmp.open('w') as f:json.dump(data,f,ensure_ascii=False,indent=2)
     os.chmod(tmp,0o600);os.replace(tmp,path)
+
+
+
+def validate_file_paths(args):
+    """Reject aliases before any output, checkpoint or update can overwrite input."""
+    inputs=('plan','edits','scope_plan','metadata','result','file','pdf','review_pdf')
+    outputs=('output','checkpoint','snapshot_output','emit_script')
+    paths=[(name,Path(value),name in outputs) for name in (*inputs,*outputs)
+           if (value:=getattr(args,name,None)) is not None]
+    # atomic_json also writes a temporary sibling before replacing its target.
+    paths.extend((name+'_temporary',path.with_name(path.name+'.tmp'),True)
+                 for name,path,_ in list(paths) if name in ('output','checkpoint','snapshot_output'))
+    for index,(name,path,writes) in enumerate(paths):
+        for other_name,other,other_writes in paths[:index]:
+            if not (writes or other_writes):continue
+            same=path.resolve()==other.resolve()
+            if not same and path.exists() and other.exists():same=path.samefile(other)
+            if same:raise ValueError('file_path_conflict')
+
+
+def validate_frame_plan(action,plan):
+    """Check local edit syntax; server state and review guards remain authoritative."""
+    if action=='run':
+        plan=plan.get('frames') if isinstance(plan,dict) else None
+        if plan is None:return
+    elif action!='frames':return
+    if not isinstance(plan,dict):raise ValueError('edit_plan_required')
+    operations=plan.get('operations')
+    if not isinstance(operations,list):raise ValueError('empty_edit_plan')
+    def frame_id(value):
+        if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',value):
+            raise ValueError('invalid_frame_id')
+    def number(value):return type(value) in (int,float) and math.isfinite(value)
+    def page(value):
+        if type(value) is not int or value<0:raise ValueError('invalid_region')
+    def regions(values):
+        if not isinstance(values,list) or not 1<=len(values)<=30:raise ValueError('missing_regions')
+        for region in values:
+            if not isinstance(region,dict):raise ValueError('invalid_region')
+            page(region.get('page'));box=region.get('bbox')
+            if (not isinstance(box,list) or len(box)!=4 or
+                not all(number(v) and 0<=v<=1 for v in box) or box[0]>=box[2] or box[1]>=box[3]):
+                raise ValueError('invalid_region')
+    def frames(values,minimum):
+        if not isinstance(values,list) or len(values)<minimum:raise ValueError('invalid_frame_children')
+        for frame in values:
+            if not isinstance(frame,dict):raise ValueError('invalid_frame_id')
+            frame_id(frame.get('id'))
+            if frame.get('parent_id'):frame_id(frame['parent_id'])
+            label=frame.get('label')
+            if not isinstance(label,str) or not label.strip() or len(label)>100:raise ValueError('invalid_frame_label')
+            regions(frame.get('regions'))
+    for operation in operations:
+        if not isinstance(operation,dict):raise ValueError('unsupported_edit')
+        kind=operation.get('type')
+        if kind in ('set','split','promote_children'):frame_id(operation.get('id'))
+        if kind=='set':
+            if 'regions' in operation:regions(operation['regions'])
+        elif kind in ('split','promote_children'):frames(operation.get('children'),2)
+        elif kind=='replace_page':
+            page(operation.get('page'));frames(operation.get('frames'),1)
+        elif kind=='shift':
+            ids=operation.get('ids')
+            if not isinstance(ids,list) or not ids or not all(number(operation.get(k)) for k in ('dx','dy')):
+                raise ValueError('invalid_shift')
+            for ident in ids:frame_id(ident)
+        else:raise ValueError('unsupported_edit')
+
+
+def local_error(exc):
+    code=str(exc) if isinstance(exc,ValueError) and str(exc).replace('_','').isalnum() else 'local_execution_failed'
+    details={
+        'file_path_conflict':{'next_action':'use_distinct_input_output_checkpoint_paths'},
+        'invalid_frame_id':{'constraint':'[A-Za-z0-9_-]{1,100}','next_action':'put_display_question_number_in_label'},
+        'invalid_region':{'constraint':'page is a nonnegative integer; bbox is finite [x1,y1,x2,y2] within 0..1 with x1<x2 and y1<y2'},
+    }
+    return {'ok':False,'error':{'code':code,**details.get(code,{})}}
 
 
 def source():
@@ -60,6 +139,7 @@ def request_payload(args,action,plan=None,checkpoint=None):
 
 
 def execute(args,action,plan=None,checkpoint=None):
+    validate_frame_plan(action,plan)
     payload=request_payload(args,action,plan,checkpoint)
     script_source=source()
     expression='('+script_source+')('+json.dumps(payload,ensure_ascii=False)+')'
@@ -121,24 +201,57 @@ def compact(data):
     return result
 
 
-def render_bundle(metadata,pdf_path,out):
+def render_bundle(metadata,pdf_path,out,allow_fallback=True):
     try:
         import pymupdf
         from PIL import Image,ImageDraw
     except ImportError:
+        if allow_fallback:
+            from paperflow_runtime import python_candidates
+            worker="import sys,json;sys.path.insert(0,sys.argv[1]);from paperflow import render_bundle;from pathlib import Path;d=json.load(sys.stdin);print(json.dumps(render_bundle(d['metadata'],Path(d['pdf']),Path(d['out']),allow_fallback=False)))"
+            for python in python_candidates():
+                try:
+                    result=subprocess.run([str(python),'-c',worker,str(ROOT)],
+                        input=json.dumps({'metadata':metadata,'pdf':str(pdf_path.absolute()),'out':str(out.absolute())}),
+                        capture_output=True,text=True,timeout=120,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
+                    if result.returncode==0:
+                        data=json.loads(result.stdout);data['renderer_python']=str(python);return data
+                    if 'review_dependency_unavailable' not in result.stderr:raise ValueError('review_render_failed')
+                except subprocess.TimeoutExpired:raise ValueError('review_render_timeout') from None
+                except OSError:continue
         raise ValueError('review_dependency_unavailable') from None
     if hashlib.sha256(pdf_path.read_bytes()).hexdigest()!=metadata.get('source_pdf_sha256'):
         raise ValueError('source_pdf_hash_mismatch')
     out.mkdir(parents=True,exist_ok=True);os.chmod(out,0o700)
     frames=metadata['frames'];start=metadata['reference_start'];count=metadata['pages_per_paper']
-    images=[];files=[];index=[];sheets=[]
+    binding={k:metadata.get(k) for k in ('batch_id','source_pdf_sha256','frame_revision','reference_student_id','reference_start','pages_per_paper')}
+    cache_key=hashlib.sha256(json.dumps({**binding,'frames':frames,'renderer_version':2},sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    previous={}
+    try:
+        previous=json.loads((out/'review.json').read_text())
+    except (OSError,ValueError):pass
+    def intact(name):
+        return (isinstance(name,str) and Path(name).name==name and (out/name).is_file() and
+                hashlib.sha256((out/name).read_bytes()).hexdigest()==previous.get('file_sha256',{}).get(name))
+    if previous.get('render_key')==cache_key and previous.get('file_sha256') and all(intact(name) for name in previous['file_sha256']):
+        manifest={**previous,**metadata,'reviewed':False};atomic_json(out/'review.json',manifest)
+        return {'manifest':str(out/'review.json'),'images':manifest['image_files'],'detail_sheets':manifest['detail_sheets'],
+            'frame_index':str(out/'frame-index.json'),'decoded_pages':0,'crops':manifest['crop_count'],'reviewed':False,'cache_hit':True}
+    raw_reusable=all(previous.get(k)==binding.get(k) for k in ('source_pdf_sha256','reference_student_id','reference_start','pages_per_paper'))
+    images=[];files=[];index=[];sheets=[];decoded=0;reused=0
     with pymupdf.open(pdf_path) as doc:
         if start<0 or count<1 or start+count>len(doc):raise ValueError('reference_page_out_of_range')
         # Decode each original page once; supply raw, overview and bounded detail views.
         for relative in range(count):
-            pix=doc[start+relative].get_pixmap(matrix=pymupdf.Matrix(2,2))
-            image=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
-            raw=out/f'raw-page-{relative+1}.png';image.save(raw);files.append(raw.name)
+            raw=out/f'raw-page-{relative+1}.png'
+            if raw_reusable and intact(raw.name):
+                with Image.open(raw) as existing:image=existing.convert('RGB')
+                reused+=1
+            else:
+                pix=doc[start+relative].get_pixmap(matrix=pymupdf.Matrix(2,2))
+                image=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
+                image.save(raw);decoded+=1
+            files.append(raw.name)
             marked=image.copy();draw=ImageDraw.Draw(marked);details=[]
             for f in frames:
                 for region in f['regions']:
@@ -180,10 +293,11 @@ def render_bundle(metadata,pdf_path,out):
     binding={k:metadata.get(k) for k in ('batch_id','source_pdf_sha256','frame_revision','reference_student_id')}
     atomic_json(out/'frame-index.json',{**binding,'reviewed':False,'frames':index})
     manifest={**metadata,'reviewed':False,'image_files':files,'detail_sheets':sheets,
-        'frame_index':'frame-index.json','decoded_pages':count,'crop_count':len(images)}
+        'frame_index':'frame-index.json','decoded_pages':decoded,'crop_count':len(images),'render_key':cache_key,
+        'file_sha256':{name:hashlib.sha256((out/name).read_bytes()).hexdigest() for name in [*files,'frame-index.json']}}
     atomic_json(out/'review.json',manifest)
     return {'manifest':str(out/'review.json'),'images':files,'detail_sheets':sheets,
-        'frame_index':str(out/'frame-index.json'),'decoded_pages':count,'crops':len(images),'reviewed':False}
+        'frame_index':str(out/'frame-index.json'),'decoded_pages':decoded,'raw_pages_reused':reused,'crops':len(images),'reviewed':False,'cache_hit':False}
 
 
 def main():
@@ -241,6 +355,9 @@ def main():
     p=sub.add_parser('catalog');p.add_argument('--plan',type=Path,required=True)
     p=sub.add_parser('collect');p.add_argument('--result',type=Path,required=True)
     args=parser.parse_args()
+    try:validate_file_paths(args)
+    except (OSError,ValueError) as exc:
+        print(json.dumps(local_error(exc),ensure_ascii=False));return 1
     import re
     if args.batch_url:
         link=urlsplit(args.batch_url)
@@ -314,6 +431,7 @@ def main():
         if args.action=='upload':plan=upload.plan(args)
         if args.action=='retry-precut':plan={'page':args.page,'frame_revision':args.frame_revision}
         if args.action=='evidence':plan={'paper_id':args.paper_id,'question_ids':args.question_id}
+        validate_frame_plan(args.action,plan)
         if args.emit_script:
             payload=request_payload(args,args.action,plan)
             engine_source=source();engine_id='__paperflow_'+hashlib.sha256(engine_source.encode()).hexdigest()[:20]
@@ -381,7 +499,7 @@ def main():
         if args.action=='snapshot' and args.snapshot_output and data.get('ok'):
             atomic_json(args.snapshot_output,data['result']);data['snapshot_file']=str(args.snapshot_output)
     except Exception as exc:
-        data={'ok':False,'error':{'code':str(exc) if isinstance(exc,ValueError) and str(exc).replace('_','').isalnum() else 'local_execution_failed'}}
+        data=local_error(exc)
     if args.output:
         atomic_json(args.output,data)
     shown=data if args.verbose else compact(data)
