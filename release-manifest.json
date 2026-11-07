@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "repository": "leondasdasdasd/scan-marked-papers",
-  "version": "1.10.7",
+  "version": "1.10.8",
   "files": {
     "README.md": "a3bf36bcbef3ed2f4b064a5cd255ddfa681b1b6f4e5c7d1a59fab8f9bb2941f8",
-    "SKILL.md": "81fb8336d51d6376abe5ae99d28ee96722c401fdba37b31052573f2d2df159ca",
+    "SKILL.md": "3d7ff0fe0b851669c907c51457ff400f5e7092288763c888bff0f6804ed3336f",
     "agents/openai.yaml": "354b51e204ba1b4ad4ce6d152ed84989118d59895ecd603581094a073615d9b2",
     "references/api.md": "59bd1af264e0bf94ae16301fbac2984608ebe4121c84d1a79a095dbe9ccf89d4",
-    "references/cli.md": "33f9962caf657dae8d2568b4ab7275c9f790132283badae39ac1913e544d95ea",
+    "references/cli.md": "5c8f3c5b9e4b8d03188a6c9459e05d6ab77178670ff1dd2d59c22a01a02dc430",
     "references/grading.md": "871e3f2d6db9bb9092aee2a0246c28422345dfb9aad4871093f334228c1396f8",
     "references/office-agents.md": "6200c0a74dbf3ea22d9746338aac91f71e3539639253d4faf06c8ec6a0036a6f",
     "references/skill-update.md": "8243e75c6ebee5c7cd3f325c5221c82705363b4cbd851b9718e3b106fc6fff1f",
@@ -20,7 +20,7 @@
     "scripts/paperflow_runtime.py": "387894bca2060c46ab6910bc28bed8c56ad38194b500e0e8bb0b10bd16906b2b",
     "scripts/paperflow_session.mjs": "0fb662e64006bd6ed84f65067f5dda65bd08de60ce99379334772daae1684e26",
     "scripts/paperflow_session.py": "5d38c3a0a0e10ac80dc9b25ab75cfb8d83fcf0183ba77a52ad41714b28ee1165",
-    "scripts/paperflow_upload.py": "f3134b2f1a516998530b7e61b73aa88daebfca8f8bea8d634699a86d37292e58",
+    "scripts/paperflow_upload.py": "ff4ef779010711db598661794f47e96c36bda68f03b17d9b424d6587ada8b08d",
     "scripts/paperflow_workflow.js": "fdcbe30a2b6c8bc100ecfb3599a35b56ccd1b875afcc7db14eb1c9b5d2cae076",
     "scripts/skill_update.py": "f2c81655952953e3fb838b485ce55f4c8c0c04888af90bfa6e0c861ae411404d"
   }

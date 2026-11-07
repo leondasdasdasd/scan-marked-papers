@@ -16,7 +16,9 @@ python3 <技能目录>/scripts/paperflow.py prepare --file <本轮PDF> --pages-p
 
 `prepare` 仅在本轮首次接到新文件、需要核实文件或本地执行能力时运行一次，复用结果，不作为每条命令前的重复步骤。`--pages-per-paper` 可省略；未核实分卷边界不能靠工具默认值猜测。它离线运行，无需 batch 或 browser-session，不联网更新、不安装依赖。
 
-文件由单个有界子进程读取一次，给出 SHA-256、字节数、PDF 头与分卷校验及耗时；现有解析器可用才给页数与 page_geometry（width_points/height_points、按3pt容差确定的A3/A4或null、orientation及pages），有每份页数时给paper_count。复用已核结果，不因另一个解释器缺模块重复换读法或安装；物理尺寸不等于分卷、页序或双面已审，缺失不是零。默认读取上限 10 秒，`pdf_read_timeout` 的下一步是 `use_existing_file_tool_or_accessible_copy`，不推断 TCC 或其他权限根因。停止重复 ls/hash/换读法，回收本轮自建挂起只读任务；由现有已授权文件工具提供可读副本后只验证一次，已有可信源哈希时核对一致，不让老师排查技术参数。不能读取则保留具体阻塞，不把“文件存在”当成可上传。
+文件有界读取并给出 SHA-256、字节数、PDF 头、真实页数、page_geometry（width_points/height_points、按3pt容差确定的A3/A4或null、orientation及pages）及耗时，有每份页数时给paper_count和分卷校验。`prepare` 与 `upload` 使用同一 PDF 预检：当前 Python 缺 pymupdf 时，在原 read-timeout 剩余预算内按下文审图环境发现范围尝试已有解释器，不安装依赖；没有可用解析器返回 `pdf_parser_unavailable`，不将页数未知当作预检成功。无论是否传 pages-per-paper，真实总页数都须为1–600，越界返回 `invalid_pdf_page_count`；需要密码的加密 PDF 返回 `pdf_password_required`，不索要或保存密码、不自动解密。保留 PDF 头、哈希、分卷及100MiB上限校验。
+
+复用已核结果，不因另一个解释器缺模块重复换读法或安装；物理尺寸不等于分卷、页序或双面已审。默认读取上限 10 秒，`pdf_read_timeout` 的下一步是 `use_existing_file_tool_or_accessible_copy`，不推断 TCC 或其他权限根因。停止重复 ls/hash/换读法，回收本轮自建挂起只读任务；由现有已授权文件工具提供可读副本后只验证一次，已有可信源哈希时核对一致，不让老师排查技术参数。不能读取则保留具体阻塞，不把“文件存在”当成可上传。
 
 本地能力摘要只反映 wrapper、agent-browser、Node 等是否存在；指定 `--playwright-cli` 时新增 `playwright_cli_file_exists`，不自动扫描缓存。返回 `browser_authentication_verified:false`；存在不证明命令契约兼容、浏览器连通或已登录。现有 evaluate 必须在产品实际授权页面验证，随后仍用 `access` 核实身份。文件检查与不依赖文件的会话核实可并行。
 

@@ -1,5 +1,6 @@
 """Local upload validation and native file binding; authentication stays in-page."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,8 @@ try:
     else:
         try:
             with pymupdf.open(stream=data, filetype='pdf') as pdf:
+                if pdf.needs_pass:raise ValueError('pdf_password_required')
+                if not 1<=len(pdf)<=600:raise ValueError('invalid_pdf_page_count')
                 result['page_count'] = len(pdf)
                 result['page_count_available'] = True
                 geometries = {}
@@ -43,6 +46,9 @@ try:
                     geometries[key] = geometries.get(key, 0) + 1
                 result['page_geometry'] = [dict(width_points=k[0], height_points=k[1],
                     paper_size=k[2], orientation=k[3], pages=count) for k, count in geometries.items()]
+        except ValueError as exc:
+            if str(exc) in ('pdf_password_required','invalid_pdf_page_count'):raise
+            raise ValueError('invalid_pdf_file') from None
         except Exception:
             raise ValueError('invalid_pdf_file')
     print(json.dumps({'ok':True, 'result':result}))
@@ -51,11 +57,19 @@ except Exception as exc:
     print(json.dumps({'ok':False, 'error':{'code':code}}))
 """
     try:
-        proc = subprocess.run([sys.executable, '-c', worker, str(path)], capture_output=True,
-                              text=True, timeout=timeout)
-        data = json.loads(proc.stdout)
-        if proc.returncode or not isinstance(data, dict) or type(data.get('ok')) is not bool:
-            raise ValueError('invalid_pdf_probe_response')
+        from paperflow_runtime import python_candidates
+        for python in (sys.executable,*python_candidates()):
+            remaining=timeout-(time.monotonic()-started)
+            if remaining<=0:raise subprocess.TimeoutExpired('pdf_probe',timeout)
+            proc = subprocess.run([str(python), '-c', worker, str(path)], capture_output=True,
+                                  text=True, timeout=remaining,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
+            data = json.loads(proc.stdout)
+            if proc.returncode or not isinstance(data, dict) or type(data.get('ok')) is not bool:
+                raise ValueError('invalid_pdf_probe_response')
+            if not data['ok'] or data['result'].get('page_count_available'):
+                break
+        if data.get('ok') and not data['result'].get('page_count_available'):
+            data={'ok':False,'error':{'code':'pdf_parser_unavailable','next_action':'use_existing_python_with_pymupdf'}}
     except subprocess.TimeoutExpired:
         data = {'ok':False, 'error':{'code':'pdf_read_timeout',
                 'next_action':'use_existing_file_tool_or_accessible_copy'}}

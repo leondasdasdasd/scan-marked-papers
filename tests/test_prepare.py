@@ -67,6 +67,32 @@ class PrepareTests(unittest.TestCase):
             self.assertEqual(data['error']['next_action'],'use_existing_file_tool_or_accessible_copy')
             self.assertNotIn(directory,json.dumps(data))
 
+    def test_page_limit_applies_without_split_and_encryption_has_specific_diagnostic(self):
+        import pymupdf
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);doc=pymupdf.open()
+            for _ in range(601):doc.new_page()
+            doc.save(root/'large.pdf');doc.close()
+            self.assertEqual(upload.probe(root/'large.pdf')['error']['code'],'invalid_pdf_page_count')
+            doc=pymupdf.open();doc.new_page();doc.save(root/'encrypted.pdf',encryption=pymupdf.PDF_ENCRYPT_AES_256,user_pw='fixture');doc.close()
+            self.assertEqual(upload.probe(root/'encrypted.pdf')['error']['code'],'pdf_password_required')
+
+    def test_default_python_reuses_existing_environment_for_page_count(self):
+        import pymupdf
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);pdf=root/'paper.pdf';doc=pymupdf.open();doc.new_page();doc.new_page();doc.save(pdf);doc.close()
+            # The first real worker shadows its parser with an ImportError; fallback uses the existing environment.
+            shadow=root/'pymupdf.py';shadow.write_text("raise ImportError('fixture parser absent')")
+            original=upload.subprocess.run;calls=[]
+            def run(command,**kwargs):
+                calls.append(command[0])
+                if len(calls)==1:kwargs['env']={**kwargs['env'],'PYTHONPATH':str(root)}
+                return original(command,**kwargs)
+            with patch('paperflow_runtime.python_candidates',return_value=iter((Path(sys.executable),))),patch.object(upload.subprocess,'run',side_effect=run):
+                result=upload.probe(pdf,pages_per_paper=2)
+            self.assertTrue(result['ok'],result);self.assertEqual(result['result']['paper_count'],1);self.assertEqual(len(calls),2)
+
     def test_invalid_header_is_rejected_before_business_submission(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'paper.pdf';path.write_text('not a PDF')
