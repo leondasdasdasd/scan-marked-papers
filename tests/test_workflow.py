@@ -269,6 +269,53 @@ test('unknown identity keeps the entire batch not ready even if platform subset 
  assert(d.ok&&!d.result.ready);assert.equal(d.result.papers,2);assert.equal(d.result.unlinked.length,1);
  assert.equal(d.result.check.counts.students,1);assert.equal(w.media,0);
 });
+test('authorized identity skipping verifies exact server IDs and preserves full-batch failure',async()=>{
+ const w=world();w.finish();w.roster.papers[1].student_id=null;
+ w.checkPolicy=()=>({selected_paper_ids:['p1'],skipped_paper_ids:['p2'],eligible_paper_ids:['p1'],
+   excluded_papers:[{paper_id:'p2',index:2,code:'STUDENT_UNLINKED',student_name:'not-needed'}]});
+ const d=await main(input('check',{skip_unlinked:true}));
+ assert(d.ok);assert.equal(d.result.ready,false);assert.equal(d.result.outcome,'ready_with_skips');
+ assert.equal(d.result.eligible_check.ready,true);assert.equal(d.result.eligible_check.papers,1);
+ assert.equal(d.result.eligible_check.full_batch_ready,false);assert.equal(d.result.papers,2);
+ assert.equal(d.result.eligible_check.scope_persisted,false);assert.equal(d.result.eligible_check.skipped[0].paper_id,'p2');
+ assert.equal(d.result.check.excluded_papers[0].student_name,undefined);assert.equal(w.media,0);
+ assert(!w.trace.some(([m,p])=>m!=='GET'&&p!==B+'/lesson-practice/preflight'));
+});
+test('identity skip does not hide another excluded reason, incomplete structure, or a selected-scope gap',async()=>{
+ for(const defect of ['wrong_ids','other_reason','missing_ids','duplicate_ids','missing_answer','narrowed_scope']){
+  const w=world();w.finish();w.roster.papers[1].student_id=null;
+  w.checkPolicy=()=>({selected_paper_ids:defect==='wrong_ids'?['p2']:defect==='duplicate_ids'?['p1','p1']:['p1'],
+    ...(defect==='missing_ids'?{}:{skipped_paper_ids:['p2']}),
+    excluded_papers:[{paper_id:'p2',code:defect==='other_reason'?'ANSWER_SET_INVALID':'STUDENT_UNLINKED'}]});
+  if(defect==='missing_answer')w.a.students[0].answers.pop();
+  if(defect==='narrowed_scope')w.cfg.config.selected_paper_ids=['p1'];
+  const d=await main(input('check',{skip_unlinked:true}));
+  assert(d.ok);assert.equal(d.result.eligible_check.ready,false,defect);assert.equal(d.result.ready,false);assert.equal(w.media,0);
+ }
+});
+test('explicit identity skip prepares only after server coverage proves precisely the skipped identities',async()=>{
+ const w=world();w.finish();w.roster.papers[1].student_id=null;
+ w.checkPolicy=n=>({selected_paper_ids:['p1'],skipped_paper_ids:['p2'],excluded_papers:[{paper_id:'p2',code:'STUDENT_UNLINKED'}],
+   ...(n===1?{ready:false,status:'preparing',issues:[{code:'MEDIA_CHECK_PENDING',severity:'pending'}]}:{})});
+ const d=await main(input('run',{skip_unlinked:true}));
+ assert(d.ok);assert.equal(d.result.eligible_check.ready,true);assert.equal(d.result.ready,false);
+ assert.equal(w.media,1);assert.equal(w.checks,2);
+});
+test('missing organizer scope stops before analysis and reuses a same-run saved roster',async()=>{
+ const w=world();w.a.status='not_generated';w.batch.scan_reference_student_id='p1';w.roster.classes=[];
+ let d=await main(input('run'));assert(d.ok);assert.equal(d.result.outcome,'needs_scope');assert.equal(w.starts,0);
+ const before=w.trace.length;
+ d=await main(input('run',{plan:{scope:{evidence_confirmed:true,evidence_note:'Selected class',revision:1,
+   semester_id:'1',class_ids:['2'],scope:{source:'teaching'}}}}));
+ assert(d.ok);assert.equal(w.starts,1);
+ assert.equal(w.trace.slice(before).filter(([m,p])=>m==='GET'&&p===B+'/roster').length,2);
+});
+test('incomplete general scope does not dispatch analysis or guess a missing directory value',async()=>{
+ const w=world();w.a.status='not_generated';w.batch.scan_reference_student_id='p1';
+ w.roster.scope={source:'general',grade:'7',subject_id:'14'};
+ const d=await main(input('run'));assert(d.ok);assert.equal(d.result.outcome,'needs_scope');assert.equal(w.starts,0);
+ assert(w.trace.every(([m])=>m==='GET'));
+});
 test('unrelated workflows remain read only',async()=>{
  const w=world();w.batch.workflow_mode='essay';const d=await main(input('run'));
  assert.equal(d.result.outcome,'unsupported_workflow');assert(w.trace.every(([m])=>m==='GET'));

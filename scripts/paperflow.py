@@ -124,6 +124,7 @@ def request_payload(args,action,plan=None,checkpoint=None):
         raise ValueError('checkpoint_origin_or_batch_mismatch')
     payload={'action':action,'origin':args.base_url,'batch':args.batch_id,'timeout':args.timeout,
              'interval':args.interval,'observe_analysis':getattr(args,'observe_analysis',False),'checkpoint':checkpoint,'plan':plan,'confirm':getattr(args,'confirm',False),'authorize_sync':getattr(args,'authorize_sync',False)}
+    if getattr(args,'skip_unlinked',False):payload['skip_unlinked']=True
     if action=='run':
         stop_after=getattr(args,'stop_after',None) or checkpoint.get('stop_after','check')
         if stop_after not in ('grading','frames','check'):raise ValueError('invalid_stop_after')
@@ -368,7 +369,9 @@ def main():
     parser.add_argument('--output',type=Path)
     parser.add_argument('--verbose',action='store_true')
     sub=parser.add_subparsers(dest='action',required=True)
-    for name in ('inspect','check','diagnose','usage','access','relogin','roster'):sub.add_parser(name)
+    for name in ('inspect','check','diagnose','usage','access','relogin','roster'):
+        p=sub.add_parser(name)
+        if name=='check':p.add_argument('--skip-unlinked',action='store_true')
     p=sub.add_parser('browser-open');p.add_argument('--executable')
     sub.add_parser('browser-close')
     p=sub.add_parser('session-connect')
@@ -398,6 +401,7 @@ def main():
     p.add_argument('--read-timeout',type=float,default=10)
     p.add_argument('--scope-plan',type=Path);p.add_argument('--file-input-selector',default='#paperflow-upload')
     p=sub.add_parser('run');p.add_argument('--plan',type=Path)
+    p.add_argument('--skip-unlinked',action='store_true')
     p.add_argument('--stop-after',choices=('grading','frames','check'))
     p.add_argument('--reference-paper',help='ID of the actually reviewed reference paper; avoids a one-field plan file')
     p.add_argument('--review-pdf',type=Path);p.add_argument('--review-out',type=Path)

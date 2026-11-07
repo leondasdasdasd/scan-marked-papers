@@ -214,6 +214,11 @@
       batch=await api('POST','/api/batches',form,{'Idempotency-Key':p.key});
     }
     if(!id(batch.id)||!Array.isArray(batch.students))fail('invalid_upload_response');
+    const pages=batch.total_pages,per=batch.pages_per_paper;
+    if(!Number.isInteger(pages)||pages<1||pages>600||!Number.isInteger(per)||per!==p.fields.pages_per_paper||
+      pages%per||batch.students.length!==pages/per-(p.fields.has_answer_paper?1:0)||
+      !batch.students.length||batch.students.some(s=>!id(s.id))||new Set(batch.students.map(s=>s.id)).size!==batch.students.length)
+      fail('invalid_upload_response',{batch_id:batch.id,next_action:'read_uploaded_batch_before_resuming'});
     ctx.setUpload({key:p.key,signature,sha256:p.sha256,state:'uploaded',batch_id:batch.id});
     if(p.scope){
       evidence(p.scope);
@@ -227,7 +232,7 @@
     }
     return {outcome:'uploaded',batch_id:batch.id,link:input.origin+'/exams/'+batch.id+(batch.workflow_mode==='scan'?'/analysis':''),
       workflow_mode:batch.workflow_mode,grading_engine:batch.grading_engine,total_pages:batch.total_pages,pages_per_paper:batch.pages_per_paper,
-      papers:batch.students.length,submitted:false};
+      papers:batch.students.length,page_count_source:'server',submitted:false};
   }
   async function sync(p){
     if(input.authorize_sync!==true)fail('sync_authorization_required');evidence(p);

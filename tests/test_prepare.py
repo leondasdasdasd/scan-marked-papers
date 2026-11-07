@@ -100,4 +100,24 @@ class PrepareTests(unittest.TestCase):
             self.assertFalse(data['ok'])
             self.assertEqual(data['error']['code'],'invalid_pdf_header')
 
+    def test_bare_python_can_prepare_without_inventing_page_count_or_installing_parser(self):
+        import pymupdf
+        system=Path('/usr/bin/python3')
+        if not system.is_file():self.skipTest('no separate system Python')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);path=root/'paper.pdf'
+            with pymupdf.open() as doc:
+                doc.new_page();doc.new_page();doc.save(path)
+            env={k:v for k,v in os.environ.items() if k not in ('VIRTUAL_ENV','PAPERFLOW_PYTHON','PYTHONPATH')}
+            env.update(PAPERFLOW_AUTO_UPDATE='0',PYTHONDONTWRITEBYTECODE='1')
+            proc=subprocess.run([str(system),str(ROOT/'scripts/paperflow.py'),'prepare','--file',str(path),
+                '--pages-per-paper','2'],cwd=root,env=env,capture_output=True,text=True,timeout=10)
+            data=json.loads(proc.stdout);self.assertEqual(proc.returncode,0,data)
+            self.assertTrue(data['ok']);self.assertIsNone(data['result']['page_count'])
+            self.assertFalse(data['result']['page_count_available'])
+            self.assertEqual(data['result']['validation_pending'],'server_pdf_validation')
+            self.assertNotIn('paper_count',data['result'])
+            self.assertEqual(data['result']['sha256'],hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertFalse(data['executed']);self.assertFalse(data['submitted'])
+
 if __name__=='__main__':unittest.main()

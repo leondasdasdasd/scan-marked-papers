@@ -167,6 +167,14 @@ test('upload sends FormData and resumes the same batch without uploading twice',
 test('upload rejects a different file and a changed plan before sending bytes',async()=>{
  const w=uploadWorld();w.uploadPlan.sha256='0'.repeat(64);const d=await main(input('upload',{batch:'',plan:w.uploadPlan}));assert.equal(d.error.code,'upload_file_mismatch');assert.equal(w.uploads,0);
 });
+test('inconsistent server page or paper counts cannot complete an upload or trigger another POST on resume',async()=>{
+ const w=uploadWorld();w.batch.total_pages=3;
+ let d=await main(input('upload',{batch:'',plan:w.uploadPlan}));
+ assert.equal(d.error.code,'invalid_upload_response');assert.equal(d.error.batch_id,'test');assert.equal(w.uploads,1);
+ assert.equal(d.checkpoint.upload_receipt.state,'dispatching');
+ d=await main(input('upload',{batch:'',plan:w.uploadPlan,checkpoint:d.checkpoint}));
+ assert.equal(d.error.code,'invalid_upload_response');assert.equal(w.uploads,1);
+});
 test('lost upload receipt reads status and never blindly resends unresolved bytes',async()=>{
  const w=uploadWorld(),p=w.uploadPlan;const cp={origin:location.origin,batch_id:'',upload_receipt:{state:'dispatching',signature:JSON.stringify([p.key,p.sha256,p.fields,null])}};
  const d=await main(input('upload',{batch:'',plan:p,checkpoint:cp}));assert(d.ok);assert.equal(d.result.outcome,'upload_uncertain');assert.equal(w.uploads,0);

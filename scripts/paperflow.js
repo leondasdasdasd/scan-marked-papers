@@ -35,7 +35,7 @@ async (input) => {
         [404,405].includes(response.status)?'contract_mismatch':response.status===429?'rate_limited':'api_failed';
       if(response.status===422&&message==='标准卷选择格式无效')code='invalid_json_body';
       if(response.status===404&&(path===B||path.startsWith(B+'/'))&&message==='考试不存在或已删除')code='batch_not_found';
-      if(response.status===422&&method==='POST'&&path===B+'/start'&&message==='请先选择年级、学科、课程和班级')code='classroom_scope_required';
+      if(response.status===422&&method==='POST'&&[B+'/start',B+'/analysis'].includes(path)&&message==='请先选择年级、学科、课程和班级')code='classroom_scope_required';
       if(response.status===409&&method==='POST'&&path===B+'/start'&&message==='关联结果已更新，请刷新后重试')code='grading_roster_changed';
       if(method==='GET'&&path===B+'/analysis/status'&&response.status===503&&
         message==='分析状态正在更新，请稍后重试')code='analysis_status_updating';
@@ -585,7 +585,7 @@ async (input) => {
       organization_started:false,submitted:false};
     let a=stopAfter==='frames'?await full():null;
     if(a&&pastPrecut(a))return precutPassed(a);
-    await selectScope(input.plan?.scope);
+    const selectedScope=await selectScope(input.plan?.scope);
     if(batch.workflow_mode==='grading'){
       const pending=await workflow.grade(batch);if(pending)return {...pending,stop_after:stopAfter};
       if(stopAfter==='grading')return workflow.gradingSummary(batch);
@@ -598,6 +598,11 @@ async (input) => {
     if(!workflow.organizer(batch)&&(!a.status||a.status==='not_generated'))return {outcome:'needs_analysis_recovery',submitted:false};
     if(a.stale)return {outcome:'source_stale',submitted:false};
     if(!a.status||a.status==='not_generated'){
+      const scope=selectedScope||await api('GET',B+'/roster');
+      if(!scope.semester_id||!(scope.classes||[]).length||scope.scope?.source==='general'&&
+        ['grade','subject_id','course_id'].some(k=>!scope.scope[k]))
+        return {outcome:'needs_scope',next_action:'select_verified_classroom_scope',
+          scope_revision:scope.revision,analysis_started:false,submitted:false};
       const reference=input.plan?.reference_student_id||batch.scan_reference_student_id;
       if(!batch.students.some(s=>s.id===reference)){
         const rate=s=>{const rows=s.judgments?.length?s.judgments:s.results;

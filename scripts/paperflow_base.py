@@ -27,6 +27,8 @@ JS = r"""async (input) => {
   const B = '/api/batches/' + input.batch;
   let batchPaperIds=[];
   const cleanCheck = d => ({ready:d.ready===true,status:d.status,counts:d.counts,
+    ...Object.fromEntries(['selected_paper_ids','skipped_paper_ids','eligible_paper_ids'].filter(k=>Array.isArray(d[k])).map(k=>[k,d[k]])),
+    ...(Array.isArray(d.excluded_papers)?{excluded_papers:d.excluded_papers.map(p=>({paper_id:p.paper_id,index:p.index,code:p.code}))}:{}),
     issues:(d.issues||[]).map(x=>({code:x.code,severity:x.severity,
       ...(x.paper_id?{paper_id:x.paper_id}:{}),...(x.question_id?{question_id:x.question_id}:{}),
       ...(x.question_label?{question_label:x.question_label}:{}),...(x.id?{id:x.id}:{}),
@@ -103,12 +105,23 @@ JS = r"""async (input) => {
         (Array.isArray(selected)&&selected.length===allIds.size&&new Set(selected).size===allIds.size&&selected.every(id=>allIds.has(id)));
       let check=await api('POST',B+'/lesson-practice/preflight',{
         revision:cfg.config.revision,allow_pending_formula_protocol:false});
+      const eligibleIds=batchPaperIds.filter(id=>!summary.unlinked.some(p=>p.paper_id===id));
+      const exactIds=(value,wanted)=>Array.isArray(value)&&value.length===wanted.length&&
+        new Set(value).size===value.length&&value.every(id=>wanted.includes(id));
+      const eligibleCoverage=d=>input.skip_unlinked===true&&summary.unlinked.length>0&&eligibleIds.length>0&&
+        exactIds(d.selected_paper_ids,eligibleIds)&&exactIds(d.skipped_paper_ids,summary.unlinked.map(p=>p.paper_id))&&
+        Array.isArray(d.excluded_papers)&&d.excluded_papers.length===summary.unlinked.length&&
+        exactIds(d.excluded_papers.map(p=>p.paper_id),summary.unlinked.map(p=>p.paper_id))&&
+        d.excluded_papers.every(p=>p.code==='STUDENT_UNLINKED')&&
+        d.counts?.students===eligibleIds.length&&d.counts?.skippedPapers===summary.unlinked.length&&
+        d.counts?.gradableQuestions===summary.leaf_questions&&d.counts?.questionResults===eligibleIds.length*summary.leaf_questions;
       const started=performance.now();
       const deadline=input.deadline??started+input.timeout*1000;
       let preparationStatus=null;
       const mediaPending=(check.issues||[]).some(i=>['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)&&i.severity==='pending');
       const hardFailure=(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity));
-      if(input.prepare && check.ready!==true && mediaPending && !hardFailure && scopeComplete && summary.structure_complete && !summary.unlinked.length) {
+      if(input.prepare && check.ready!==true && mediaPending && !hardFailure && scopeComplete && summary.structure_complete &&
+        (!summary.unlinked.length||eligibleCoverage(check))) {
         const existing=await api('GET',B+'/lesson-practice/progress');
         if(existing.preparation?.status!=='running')
           await api('POST',B+'/lesson-practice/progress/start',{revision:cfg.config.revision});
@@ -131,6 +144,8 @@ JS = r"""async (input) => {
       const ready=check.ready===true&&scopeComplete&&coverageMatches&&
         check.status==='awaiting_confirmation'&&summary.structure_complete&&!summary.unlinked.length&&
         !(check.issues||[]).some(i=>['pending','blocker','failure'].includes(i.severity));
+      const eligibleReady=eligibleCoverage(check)&&check.ready===true&&scopeComplete&&summary.structure_complete&&
+        check.status==='awaiting_confirmation'&&!(check.issues||[]).some(i=>['pending','blocker','failure'].includes(i.severity));
       const remaining=[];
       if(summary.analysis_status!=='completed'||summary.stale)remaining.push({code:'ANALYSIS_INCOMPLETE',analysis_status:summary.analysis_status});
       if(summary.failed_analysis_papers.length)remaining.push({code:'ANALYSIS_FAILED_PAPERS',count:summary.failed_analysis_papers.length});
@@ -147,14 +162,20 @@ JS = r"""async (input) => {
         if(prior)prior.count++;else remaining.push({code:issue.code,severity:issue.severity,count:1});
       }
       result={...summary,scope_complete:scopeComplete,check_coverage_matches:coverageMatches,
+        ...(input.skip_unlinked===true?{eligible_check:{ready:ready||eligibleReady,
+          coverage_verified:coverageMatches||eligibleCoverage(check),papers:eligibleIds.length,
+          expected_answers:eligibleIds.length*summary.leaf_questions,
+          skipped:summary.unlinked.map(p=>({...p,reason:'identity_unconfirmed'})),
+          full_batch_ready:ready,scope_persisted:false}}:{}),
         completion:{analysis_completed:summary.analysis_status==='completed'&&!summary.stale,
           structure_verified:summary.structure_complete,identity_complete:summary.unlinked.length===0&&summary.roster_coverage_complete,
           media_pending:pendingMedia,media_blocked:blockedMedia,preflight_passed:ready},remaining,
         preparation_status:preparationStatus,waiting_for_media:preparationStatus==='running'&&pendingMedia&&
-          scopeComplete&&coverageMatches&&summary.structure_complete&&!summary.unlinked.length&&
+          scopeComplete&&(coverageMatches||eligibleCoverage(check))&&summary.structure_complete&&
+          (!summary.unlinked.length||eligibleCoverage(check))&&
           !(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity)),
         check:cleanCheck(check),ready,
-        outcome:ready?'ready':!scopeComplete?'coverage_gap':summary.unlinked.length?'identity_pending':!coverageMatches?'coverage_gap':
+        outcome:ready?'ready':eligibleReady?'ready_with_skips':!scopeComplete?'coverage_gap':summary.unlinked.length?'identity_pending':!coverageMatches?'coverage_gap':
           (check.issues||[]).some(i=>['blocker','failure'].includes(i.severity))?'blocked':'pending',
         stopped_at:'preflight',submitted:false};
     } else if(input.action==='watch') {

@@ -69,7 +69,8 @@ except Exception as exc:
             if not data['ok'] or data['result'].get('page_count_available'):
                 break
         if data.get('ok') and not data['result'].get('page_count_available'):
-            data={'ok':False,'error':{'code':'pdf_parser_unavailable','next_action':'use_existing_python_with_pymupdf'}}
+            data['result']['validation_pending']='server_pdf_validation'
+            data['next_action']='upload_for_authoritative_pdf_validation'
     except subprocess.TimeoutExpired:
         data = {'ok':False, 'error':{'code':'pdf_read_timeout',
                 'next_action':'use_existing_file_tool_or_accessible_copy'}}
