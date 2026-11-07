@@ -79,6 +79,19 @@ class UpdateTests(unittest.TestCase):
     def ensure(self, **kwargs):
         return updater.ensure(self.root, cache=self.cache, now=DAY, get=self.get, **kwargs)
 
+    def test_versioned_helpers_are_required_without_blocking_older_baselines(self):
+        updater.validate_manifest(self.baseline)
+        previous=contents('1.10.9');previous['scripts/paperflow_runtime.py']=b'pass\n'
+        updater.validate_manifest(manifest_for(previous,'1.10.9'))
+        files=contents('1.10.10')
+        for name in updater.VERSIONED_REQUIRED:files[name]=b'pass\n'
+        latest=manifest_for(files,'1.10.10');updater.validate_manifest(latest)
+        for name in updater.VERSIONED_REQUIRED:
+            with self.subTest(name=name):
+                incomplete={**latest,'files':{key:value for key,value in latest['files'].items() if key!=name}}
+                with self.assertRaisesRegex(updater.UpdateError,'incomplete_release_manifest'):
+                    updater.validate_manifest(incomplete)
+
     def test_latest_is_recorded_and_same_day_calls_make_no_network_requests(self):
         self.set_remote('1.9.0')
         first = self.ensure()

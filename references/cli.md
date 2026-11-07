@@ -10,6 +10,16 @@
 
 ## 首次材料与能力预检
 
+安装后或遇到环境缺口时先按需运行离线诊断，不必每条业务命令重复执行：
+
+```bash
+python3 <技能目录>/scripts/paperflow.py doctor --read-timeout 10
+```
+
+`doctor` 无需 PDF、batch 或 session，不触发更新、不安装、不联网、不登录，不运行 wrapper 或启动浏览器。`installation` 核对完整 manifest 及其发行文件哈希；完整性失败则跳过环境 helper。`python` 通过实际 import 检查已有解释器，返回 `parser_python`、`renderer_python` 和 `attempts`；read-timeout 仅为 Python 候选共享预算，isolated 另有最多3秒的本地 Node fetch/WebSocket 能力检查，不承诺整个 doctor 的硬墙钟预算。
+
+`browser.entrypoint_found` 只表示所选入口的静态条件具备，`execution_verified`、`authentication_verified` 均为 false；wrapper 存在不证明调用契约或鉴权。isolated 不连接会话；若显式指定 session，仅只读本地控制文件是否存在以匹配实际 backend，不读取凭证。结果中 `network_checked=false`、`business_execution_verified=false`，outcome 为 `offline_prerequisites_available` 或 `offline_prerequisites_incomplete`，不能将前者当作真实业务验收通过。
+
 ```bash
 python3 <技能目录>/scripts/paperflow.py prepare --file <本轮PDF> --pages-per-paper <已核实每份页数> --read-timeout 10
 ```
@@ -138,6 +148,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 
 | 命令 | 用途与边界 |
 | --- | --- |
+| `doctor [--read-timeout 10]` | 离线校验完整 manifest、已有 Python 依赖与所选浏览器入口；无需 PDF/batch/session，不更新安装联网或启动浏览器，不验证业务执行与鉴权 |
 | `prepare --file <PDF> [--pages-per-paper N] [--read-timeout 10]` | 首次材料有界读取与本地能力摘要；离线、无 batch/会话，不认证浏览器，不重复运行 |
 | `session-connect [--source-url <CDP入口>] [--source-target <ID>] [--target-url <独立CDP入口>] [--executable <已有浏览器路径>]` | 复用已核验独立会话，或定点内存迁移必要登录态；不操作源页面、不导出凭证；需全局 browser-session，无需 batch |
 | `session-status` | 核验本次独立上下文、同一身份及课堂会话，读 connected/outcome；不以 ok=true 代替 connected=true |

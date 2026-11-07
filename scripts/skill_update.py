@@ -26,6 +26,7 @@ REQUIRED = {'SKILL.md', 'agents/openai.yaml', 'references/skill-update.md', 'ref
             'scripts/paperflow_upload.py', 'scripts/paperflow_workflow.js',
             'scripts/api_contracts.json', 'scripts/skill_update.py',
             'scripts/paperflow_session.py', 'scripts/paperflow_session.mjs'}
+VERSIONED_REQUIRED = {'scripts/paperflow_runtime.py':'1.10.6', 'scripts/paperflow_doctor.py':'1.10.10'}
 MAX_DOWNLOAD = 12 * 1024 * 1024
 
 
@@ -117,7 +118,9 @@ def validate_manifest(data, expected=None):
     if expected is not None and data['version'] != expected:
         raise UpdateError('release_version_mismatch')
     files = data.get('files')
-    if not isinstance(files, dict) or not REQUIRED <= files.keys() or len(files) > 200:
+    required=REQUIRED|{name for name,introduced in VERSIONED_REQUIRED.items()
+                       if version_key(data['version'])>=version_key(introduced)}
+    if not isinstance(files, dict) or not required <= files.keys() or len(files) > 200:
         raise UpdateError('incomplete_release_manifest')
     for name, digest in files.items():
         safe_path(name)

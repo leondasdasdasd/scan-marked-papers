@@ -11,7 +11,7 @@ python3 <本技能目录>/scripts/skill_update.py ensure
 1. 先读取本机自然日与持久检查记录。同一已安装版本当天已有结果就使用本地记录，不再次联网；最新版、本地较新、网络失败或冲突等结果都按真实状态保存。未检查或跨日时再读取官方main。
 2. 固定官方仓库为`leondasdasdasd/scan-marked-papers`，分发入口为main的`scan-marked-papers.zip`。先取得main提交SHA，再从同一固定提交读取SKILL.md、release-manifest.json与ZIP，防止检查和下载之间main变化。Releases/tags只作历史信息，不用过期releases/latest替代当前main，也不跟随fork或任意remote更新。
 3. 比较真实语义版本：只有官方版本更高才安装；版本相同记录已核对，本地较新记录本地领先，不降级。不能把网络失败、旧缓存或页面标题当作已是最新版。
-4. 安装前核对目标版本、manifest中的运行文件SHA、ZIP顶层结构与合法相对路径、必要SKILL/agents/references/scripts文件。校验完成前不替换。manifest不包含自身的自引用哈希；不执行下载包中的未知安装脚本，不要求正式包附带测试或开发文档。
+4. 安装前核对目标版本、manifest中的运行文件SHA、ZIP顶层结构与合法相对路径、必要SKILL/agents/references/scripts文件。必要文件按目标版本校验：1.10.6起包含 runtime helper，1.10.10起包含 doctor；旧版基线仍按其版本兼容校验。校验完成前不替换。manifest不包含自身的自引用哈希；不执行下载包中的未知安装脚本，不要求正式包附带测试或开发文档。
 5. 用已安装release-manifest.json核对本地发行文件基线。发现用户修改或新文件覆盖冲突就保留旧版并报告具体文件，不自动强覆；无manifest的旧安装返回`baseline_missing`，不动态把本地文件当官方基线，不自动覆盖。首次升至1.9.0按下文显式安装完成，之后才具备自动更新基线。
 6. 只更新本技能，将备份置于技能发现目录之外；保留本地额外内容，保护登录态、Cookie、令牌、任务checkpoint、试卷及其他技能。替换后核对实际版本与文件哈希；失败恢复原备份并验证回滚，不删用户旧目录。
 7. 更新成功后重新读取实际安装SKILL.md及本次需要的参考，CLI业务入口重载更新后的代码；不在一次业务操作中混用新旧契约。无变化、同日复用通常无需打断老师，只在实际升级、冲突或影响本次处理的失败时简要说明。

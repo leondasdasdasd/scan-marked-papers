@@ -361,6 +361,7 @@ def main():
         if name=='class-students':p.add_argument('--class-id',required=True)
     p=sub.add_parser('prepare');p.add_argument('--file',type=Path,required=True);p.add_argument('--pages-per-paper',type=int)
     p.add_argument('--read-timeout',type=float,default=10)
+    p=sub.add_parser('doctor');p.add_argument('--read-timeout',type=float,default=10)
     p=sub.add_parser('upload');p.add_argument('--file',type=Path,required=True);p.add_argument('--pages-per-paper',type=int,required=True)
     p.add_argument('--key',required=True);p.add_argument('--workflow',choices=('scan','grading'),default='scan')
     p.add_argument('--engine',choices=('llm','xueersi','doubao'),default='llm');p.add_argument('--model',default='qwen3.8-max')
@@ -399,6 +400,15 @@ def main():
             parser.error('batch URL conflicts with origin or batch id')
         args.base_url=origin;args.batch_id=match[1]
     args.base_url=(args.base_url or base.DEFAULT_ORIGIN).rstrip('/')
+    if args.action=='doctor':
+        if not 0.1<=args.read_timeout<=60:parser.error('read-timeout 0.1..60')
+        try:
+            from paperflow_doctor import doctor
+            result=doctor(args,ROOT.parent)
+        except ImportError:
+            result={'ok':False,'error':{'code':'installation_incomplete','next_action':'verify_installed_release_files'}}
+        if args.output:atomic_json(args.output,result)
+        print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
     if args.action=='prepare':
         if not 0.1<=args.read_timeout<=60:parser.error('read-timeout 0.1..60')
         result=upload.prepare(args)
