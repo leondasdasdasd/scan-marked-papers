@@ -25,7 +25,7 @@ JS = r"""async (input) => {
     return await response.json();
   }
   const B = '/api/batches/' + input.batch;
-  let batchPaperIds=[];
+  let batchPaperIds=[],batchLeafIds=[];
   const cleanCheck = d => ({ready:d.ready===true,status:d.status,counts:d.counts,
     ...Object.fromEntries(['selected_paper_ids','skipped_paper_ids','eligible_paper_ids'].filter(k=>Array.isArray(d[k])).map(k=>[k,d[k]])),
     ...(Array.isArray(d.excluded_papers)?{excluded_papers:d.excluded_papers.map(p=>({paper_id:p.paper_id,index:p.index,code:p.code}))}:{}),
@@ -54,6 +54,7 @@ JS = r"""async (input) => {
     let answers=0,duplicate_answers=0,unexpected_answers=0;
     const expectedPairs=new Set();
     const ids=new Set(leaves.map(q=>q.id));
+    batchLeafIds=[...ids];
     for(const s of a.students||[]) {
       if(seen.has(s.id)) duplicates.push(s.id);
       seen.add(s.id);
@@ -108,20 +109,32 @@ JS = r"""async (input) => {
       const eligibleIds=batchPaperIds.filter(id=>!summary.unlinked.some(p=>p.paper_id===id));
       const exactIds=(value,wanted)=>Array.isArray(value)&&value.length===wanted.length&&
         new Set(value).size===value.length&&value.every(id=>wanted.includes(id));
-      const eligibleCoverage=d=>input.skip_unlinked===true&&summary.unlinked.length>0&&eligibleIds.length>0&&
+      const eligibleSelection=d=>input.skip_unlinked===true&&summary.unlinked.length>0&&eligibleIds.length>0&&
         exactIds(d.selected_paper_ids,eligibleIds)&&exactIds(d.skipped_paper_ids,summary.unlinked.map(p=>p.paper_id))&&
         Array.isArray(d.excluded_papers)&&d.excluded_papers.length===summary.unlinked.length&&
         exactIds(d.excluded_papers.map(p=>p.paper_id),summary.unlinked.map(p=>p.paper_id))&&
         d.excluded_papers.every(p=>p.code==='STUDENT_UNLINKED')&&
-        d.counts?.students===eligibleIds.length&&d.counts?.skippedPapers===summary.unlinked.length&&
-        d.counts?.gradableQuestions===summary.leaf_questions&&d.counts?.questionResults===eligibleIds.length*summary.leaf_questions;
+        d.counts?.students===eligibleIds.length&&d.counts?.skippedPapers===summary.unlinked.length;
+      const eligibleCoverage=d=>eligibleSelection(d)&&d.counts?.gradableQuestions===summary.leaf_questions&&d.counts?.questionResults===eligibleIds.length*summary.leaf_questions;
+      const mediaCodes=['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'];
+      const eligiblePreparation=d=>{
+        if(!eligibleSelection(d))return false;
+        const pending=(d.issues||[]).filter(i=>i.severity==='pending');
+        if(pending.some(i=>!mediaCodes.includes(i.code)))return false;
+        if(eligibleCoverage(d))return true;
+        const questions=new Set(pending.filter(i=>i.code==='QUESTION_ASSET_INVALID').map(i=>i.question_id));
+        const count=d.counts?.gradableQuestions;
+        return Number.isInteger(count)&&count>=0&&count<summary.leaf_questions&&
+          questions.size===summary.leaf_questions-count&&[...questions].every(id=>batchLeafIds.includes(id))&&
+          d.counts?.questionResults===eligibleIds.length*count;
+      };
       const started=performance.now();
       const deadline=input.deadline??started+input.timeout*1000;
       let preparationStatus=null;
       const mediaPending=(check.issues||[]).some(i=>['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)&&i.severity==='pending');
       const hardFailure=(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity));
       if(input.prepare && check.ready!==true && mediaPending && !hardFailure && scopeComplete && summary.structure_complete &&
-        (!summary.unlinked.length||eligibleCoverage(check))) {
+        (!summary.unlinked.length||eligiblePreparation(check))) {
         const existing=await api('GET',B+'/lesson-practice/progress');
         if(existing.preparation?.status!=='running')
           await api('POST',B+'/lesson-practice/progress/start',{revision:cfg.config.revision});
@@ -171,8 +184,8 @@ JS = r"""async (input) => {
           structure_verified:summary.structure_complete,identity_complete:summary.unlinked.length===0&&summary.roster_coverage_complete,
           media_pending:pendingMedia,media_blocked:blockedMedia,preflight_passed:ready},remaining,
         preparation_status:preparationStatus,waiting_for_media:preparationStatus==='running'&&pendingMedia&&
-          scopeComplete&&(coverageMatches||eligibleCoverage(check))&&summary.structure_complete&&
-          (!summary.unlinked.length||eligibleCoverage(check))&&
+          scopeComplete&&(coverageMatches||eligiblePreparation(check))&&summary.structure_complete&&
+          (!summary.unlinked.length||eligiblePreparation(check))&&
           !(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity)),
         check:cleanCheck(check),ready,
         outcome:ready?'ready':eligibleReady?'ready_with_skips':!scopeComplete?'coverage_gap':summary.unlinked.length?'identity_pending':!coverageMatches?'coverage_gap':

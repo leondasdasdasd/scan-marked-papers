@@ -666,7 +666,11 @@ async (input) => {
         if(unconverted)return {outcome:'needs_catalog_review',review:snapshot(batch,a),submitted:false};
         if(input.plan?.associations)await associate(input.plan.associations);
         const check=await inspectOrCheck('check',{batch});
-        return {...check,...(check.waiting_for_media?{outcome:'waiting',waiting_for:'media',analysis_status:a.status}:{}),visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
+        const referenceAnswersPending=a.reference_preparation?.status==='running'&&
+          (check.check?.issues||[]).some(i=>i.code==='STANDARD_ANSWER_MISSING');
+        return {...check,...(referenceAnswersPending?{reference_answers_pending:true,
+          next_action:'observe_reference_answers_before_catalog_edits'}:{}),
+          ...(check.waiting_for_media?{outcome:'waiting',waiting_for:'media',analysis_status:a.status}:{}),visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
           expected_granularity_verified:!!expected,review:snapshot(batch,a),review_tasks:reviewTasks(check,a,batch),submitted:false};
       }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,
         ...(['partial','failed'].includes(a.status)?await recoverySummary(a,batch):{}),submitted:false};

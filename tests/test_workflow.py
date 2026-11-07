@@ -303,6 +303,55 @@ test('explicit identity skip prepares only after server coverage proves precisel
  assert(d.ok);assert.equal(d.result.eligible_check.ready,true);assert.equal(d.result.ready,false);
  assert.equal(w.media,1);assert.equal(w.checks,2);
 });
+test('identity-skip media preparation can restore a precisely identified pending question without certifying missing coverage',async()=>{
+ const w=world();w.finish();w.roster.papers[1].student_id=null;
+ w.checkPolicy=n=>({selected_paper_ids:['p1'],skipped_paper_ids:['p2'],excluded_papers:[{paper_id:'p2',code:'STUDENT_UNLINKED'}],
+   ...(n===1?{ready:false,status:'preparing',counts:{students:1,skippedPapers:1,gradableQuestions:1,questionResults:1},
+     issues:[{code:'QUESTION_ASSET_INVALID',severity:'pending',question_id:'group'},
+       {code:'MEDIA_CHECK_PENDING',severity:'pending'}]}:{})});
+ const d=await main(input('run',{skip_unlinked:true}));
+ assert(d.ok);assert.equal(w.media,1);assert.equal(w.checks,2);
+ assert.equal(d.result.eligible_check.ready,true);assert.equal(d.result.eligible_check.coverage_verified,true);
+ assert.equal(d.result.ready,false);assert.equal(d.result.eligible_check.full_batch_ready,false);
+ assert(!w.trace.some(([m,p])=>m==='PUT'||(m!=='GET'&&p.includes('/imports'))));
+});
+test('pending question media never licenses other exclusions, unknown questions, or unexplained count gaps',async()=>{
+ for(const defect of ['other_reason','wrong_ids','unknown_question','unexplained_count','nonmedia_pending','bad_results','blocker']){
+  const w=world();w.finish();w.roster.papers[1].student_id=null;
+  w.checkPolicy=()=>({ready:false,status:'preparing',selected_paper_ids:defect==='wrong_ids'?['p2']:['p1'],skipped_paper_ids:['p2'],
+    excluded_papers:[{paper_id:'p2',code:defect==='other_reason'?'ANSWER_SET_INVALID':'STUDENT_UNLINKED'}],
+    counts:{students:1,skippedPapers:1,gradableQuestions:defect==='unexplained_count'?0:1,questionResults:defect==='bad_results'?0:1},
+    issues:[{code:'QUESTION_ASSET_INVALID',severity:'pending',question_id:defect==='unknown_question'?'missing':'group'},
+     ...(defect==='nonmedia_pending'?[{code:'ANSWER_PENDING',severity:'pending'}]:[]),
+     ...(defect==='blocker'?[{code:'QUESTION_ASSET_INVALID',severity:'blocker'}]:[])]});
+  const d=await main(input('check',{skip_unlinked:true}));assert(d.ok);
+  assert.equal(w.media,0,defect);assert.equal(d.result.ready,false);assert.equal(d.result.eligible_check.ready,false);
+  assert.equal(d.result.eligible_check.coverage_verified,false);
+ }
+});
+test('still-pending skipped-scope question media remains waiting with strict coverage false',async()=>{
+ const w=world();w.finish();w.roster.papers[1].student_id=null;w.progressQueue=['running','running'];
+ w.checkPolicy=()=>({ready:false,status:'preparing',selected_paper_ids:['p1'],skipped_paper_ids:['p2'],
+  excluded_papers:[{paper_id:'p2',code:'STUDENT_UNLINKED'}],
+  counts:{students:1,skippedPapers:1,gradableQuestions:1,questionResults:1},
+  issues:[{code:'QUESTION_ASSET_INVALID',severity:'pending',question_id:'group'}]});
+ const d=await main(input('run',{skip_unlinked:true,timeout:0}));assert(d.ok);
+ assert.equal(w.media,0);assert.equal(d.result.outcome,'waiting');assert.equal(d.result.waiting_for,'media');
+ assert.equal(d.result.eligible_check.ready,false);assert.equal(d.result.eligible_check.coverage_verified,false);
+ assert.equal(d.result.ready,false);
+});
+test('missing standard answers distinguish an already-running answer subtask without retrying or claiming readiness',async()=>{
+ for(const status of ['running','ready','failed']){
+  const w=world();w.finish();w.a.reference_preparation={status};
+  w.checkPolicy=()=>({ready:false,issues:[{code:'STANDARD_ANSWER_MISSING',severity:'blocker'}]});
+  const d=await main(input('run'));assert(d.ok);assert.equal(d.result.ready,false);
+  assert.equal(d.result.reference_answers_pending,status==='running'?true:undefined);
+  assert.equal(d.result.next_action,status==='running'?'observe_reference_answers_before_catalog_edits':undefined);
+  assert.equal(d.result.review.reference_preparation.status,status);
+  assert.equal(w.starts,0);assert.equal(w.patches,0);assert.equal(w.media,0);assert.equal(w.checks,1);
+  assert(w.trace.every(([m,p])=>m==='GET'||p===B+'/lesson-practice/preflight'));
+ }
+});
 test('missing organizer scope stops before analysis and reuses a same-run saved roster',async()=>{
  const w=world();w.a.status='not_generated';w.batch.scan_reference_student_id='p1';w.roster.classes=[];
  let d=await main(input('run'));assert(d.ok);assert.equal(d.result.outcome,'needs_scope');assert.equal(w.starts,0);
