@@ -52,6 +52,8 @@ stop_after在派发前写入本次checkpoint，后续省略--stop-after时沿用
 | `--emit-script <PATH>` + 现有浏览器 evaluate | 不要求browser-session或兼容CLI后端。只生成一次加载的engine_file与小步骤script_file，返回executed=false。首次/导航后先evaluate引擎，再执行小步骤并collect；后续只执行小步骤，不重新拼fetch或逐轮展开完整引擎 |
 | 原生页面 | 仅登录、确需文件注入/图证，或已有具体接口/工具缺口时使用；缺能力如实保留阻塞 |
 
+Playwright 后端的大目录等长脚本由 CLI 自动选择传输方式：UTF-8 代码超过 96 KiB 时使用已核实的 playwright-cli 0.1.18 原生 `run-code --filename`，临时 JS 位于当前工作目录下的受限临时目录，执行完成、异常或超时后清理；短代码保持原路径，agent-browser 仍走 stdin。不因脚本较大手写 `require`、拆分目录保存或改走自行拼接请求；正常使用既有业务命令，真实失败按原始诊断处理。
+
 `--playwright-cli` 仅作用于 playwright 后端，检查已有 Node 与入口文件；缺失返回 `existing_playwright_cli_unavailable`，不静默回退 wrapper/npx，不下载依赖。它不证明命令契约、浏览器连通或认证已验证。示例：
 
 ```bash
@@ -124,7 +126,7 @@ collect不访问浏览器、不重新执行或再次验证业务，校验布尔o
 
 emit即使带--follow也只运行一轮timeout预算，不持续后台跟进；waiting先collect再生成下一轮，不重复启动。各轮沿用该阶段本轮墙钟累计预算（默认600秒，可按用户明确需要调整），不每轮重置；这不是CLI emit已实现的全局预算。正常running且进度暂不变本身不是失败证据，沿预算等待，只有明确重复错误或不可恢复诊断才提前停止。到限交付“处理中/检查未完成”、进度、链接与原checkpoint，下次续原batch，不无限轮询、重传或假报ready，不按固定轮数判失败。
 
-正常 `run --follow` 跨 waiting 续接时，若上轮已明确分析活跃，内部观察保留 imports/task control 检查，稳定阶段省去重复 batch/catalog 读取；阶段变化后再次检查 control 并作权威读取才继续。此优化不新增 CLI 开关，不改变写前保护或 emit 跨轮管理。状态与进度相同时，等待间隔以1.5倍退避，上限为 `min(3*interval,15秒)`；进度变化回到 interval，睡眠不越过单轮 deadline。分析与媒体共享执行 deadline；Python follow 每轮 timeout 仅取剩余 max-seconds。业务 HTTP 在途仍可能使实际墙钟超过预算，这些预算不是硬超时或服务端完成承诺，减少轮询也不证明真实处理更快。
+正常 `run --follow` 跨 waiting 续接时，若上轮已明确分析活跃，内部观察保留 imports/task control 检查，稳定阶段省去重复 batch/catalog 读取；阶段变化后再次检查 control 并作权威读取才继续。此优化不新增 CLI 开关，不改变写前保护或 emit 跨轮管理。状态与进度相同时，等待间隔以1.5倍退避，上限为 `min(3*interval,15秒)`；进度变化回到 interval，睡眠不越过单轮 deadline。分析与媒体共享执行 deadline；Python follow 每轮 timeout 仅取剩余 max-seconds。分析观察器仅对本批 `GET /api/batches/<batch_id>/analysis/status` 返回503且原文为“分析状态正在更新，请稍后重试”时，在原 deadline 内有界等待并最多额外读取2次；成功读取后清零连续失败计数。耗尽次数或预算时保留 `analysis_status_updating` 诊断；其他503、写请求及模型传输不因此自动重试。业务 HTTP 在途仍可能使实际墙钟超过预算，这些预算不是硬超时或服务端完成承诺，减少轮询也不证明真实处理更快。
 
 emit 结果已 collect 且有本地原 PDF 时，可直接复用元数据生成校对包，无须再读浏览器：
 
@@ -142,7 +144,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 
 备用 Python 审图保留 `source_pdf_hash_mismatch`、`reference_page_out_of_range`、`invalid_review_bbox`、`file_path_conflict` 的具体诊断，其余渲染失败概括为 `review_render_failed`；按实际错误处理，不将所有失败推断为依赖缺失。
 
-默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
+默认stdout为紧凑JSON，保留下一步摘要与路径，省去完整checkpoint、调用明细和大块几何；api-call的大data/readback也输出程序摘要，目录、sync-options、links、correction-item保留必要正文。general目录保留 `scope_query`；已按grade或subject_id过滤时，紧凑stdout以 `selected_grade`/`selected_subject_id` 和 `grades_count`/`subjects_count` 替代对应整列表，保留courses/classes。完整 `--output` 仍保留原列表和过滤参数，需要复核时读取该文件，不因stdout压缩重复查询。全局`--output`保存去除token等认证字段后的完整业务envelope，按问题定点读取，不反复整份展开；只有诊断需要才--verbose。`snapshot --output <JSON>`位于子命令后，保存裸snapshot，与全局output不同；snapshot包含read_version，可作为review写计划expected.read_version，不能拼造版本。仅在 `analysis_status=awaiting_frames` 时，snapshot的 `precut_diagnosis` 保留预切失败页和简短问题；其他阶段为null。诊断与snapshot均不证明实际审阅。timeout为单轮预算，正常run --follow --max-seconds为跨waiting的有界预算，都不是服务端完成承诺。
 
 `ok`/退出码只说明工具执行，业务完成看outcome、completion、remaining、顶层ready/submitted与真实全批覆盖，不只取原始preflight.ready。upload经FormData创建，scan/grading均由run按已选终点推进；只批改看grading_completed/grading_incomplete与原始全批覆盖，不要求ready；原生文件工具只向接口环境注入PDF，不默认点击上传表单。旧兼容入口的能力以自身help为准，不据此限制主入口的新命令。
 
@@ -180,7 +182,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 
 ## 目录、上传与文件注入
 
-先 access；课堂会话失效先完成一次 relogin 恢复并重新 access 验证，再用 classes 读取本次真实目录。复用已返回且符合本次选择的 source/course/semester 等精确参数，不重做无过滤查询、不猜 ID；teaching使用教学课程，general按grade、subject-id、course-id逐级读取。class-students使用同一组scope参数核对允许班级名单。多候选需用户决定时集中问业务选择，不让老师填写ID或工具参数。
+先 access；课堂会话失效先完成一次 relogin 恢复并重新 access 验证，再用 classes 读取本次真实目录。复用已返回且符合本次选择的 source/course/semester 等精确参数，不重做无过滤查询、不猜 ID；teaching使用教学课程；返回 `next_action=query_general_directory` 时，按提示改查general，不再对同一空teaching源重试无过滤查询。general按grade、subject-id、course-id逐级读取。class-students使用同一组scope参数核对允许班级名单。多候选需用户决定时集中问业务选择，不让老师填写ID或工具参数。
 
 scope计划与run.scope结构相同：当前revision、semester_id、class_ids、scope对象及evidence_confirmed/evidence_note。scope.source为teaching或general；general还须真实grade/subject_id/course_id。现有批次先读roster取revision；新上传可给`--scope-plan <JSON>`，工具在创建或恢复原batch后读取它的当前revision再绑定，不把旧batch版本套到新记录。保存后回读名单与范围，录入后不擅换班。
 
@@ -229,7 +231,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 | `needs_reference` | 按真实清晰度、完整性与教师批注实际审阅并选本批参考卷，直接 run --reference-paper <卷ID> --follow；无须单字段plan。若全批已有完整已知verdict，候选按现成正确率排序；否则仍取前几份轻量比较，不增加识别调用。candidates含id/index/pdf_pages/原图URL，correct_rate仅在有真实统计时使用，范围0–1，不把缺失当零或凭空编百分比；候选摘要不是处理范围 |
 | `needs_file_binding`、`upload_uncertain` | 前者只补原生文件绑定后执行既有脚本；后者查原key状态并保留upload_receipt，不改文件/参数或盲重传 |
 | `needs_grading_recovery`、`needs_analysis_recovery` | 按真实failed/诊断定位原批改或后续整理缺口，分别采用适用的定点恢复计划，不切模式、重跑done或把部分范围当完成 |
-| `needs_precut_recovery` | 读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
+| `needs_precut_recovery` | run同时携带 `review` snapshot，优先复用它；有本地原PDF时可配对传 `--review-pdf`/`--review-out` 生成图包，无须为渲染另拉snapshot。snapshot和生成图包仍不算实际审阅。读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
 | `needs_frame_review` | 复用 run 生成的 review 包，实际核对全部参考页，一次整理必要框修改，再应用并确认。没有包且已有本地原 PDF 时才单独 review，已有元数据优先 --metadata 离线复用；已有链接无本地 PDF 时按原技能读取参考页，不索要或重传原卷 |
 | `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先集中修改并用 catalog-save-draft/catalog-save-review 保存一次，回读新版本与实际任务状态，历史 ready 作废；实际审完后用catalog --plan确认，再run |
 | `needs_targeted_recovery`、partial/failed 或检查阻塞 | 先读具体失败与 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |
@@ -318,6 +320,7 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 | `isolated_cleanup_incomplete` | 本次目标上下文/自建浏览器或临时目录清理未完成；保留控制记录，以原任务名 session-close 重试，不手删记录、不关源浏览器 |
 | `invalid_api_response` | 返回不是有效业务响应；按 read_state_before_retry 先只读查当前状态，不重放写请求 |
 | `contract_mismatch` | 核对真实部署响应与当前参考，必要时用页面，不猜路由或翻压缩源码 |
+| `analysis_status_updating` | 仅上述精确状态GET/503/原文组合适用观察器内有限只读恢复；到限保留诊断与原checkpoint，不延长原预算、不重启任务，不据此承诺服务端或端到端提速 |
 | `rate_limited` | 按服务端提示有界等待后只读核对，不紧循环重放写 |
 | `transport_uncertain` | 请求可能已送达，先读状态与持久化结果，不能直接重发 |
 

@@ -173,6 +173,12 @@ def compact(data):
     result['http']={'count':len(calls),'failed':sum(c.get('status',0)>=400 for c in calls),
                     'request_ms_sum':sum(c.get('ms',0) for c in calls)}
     r=dict(result.get('result') or {})
+    if r.get('outcome')=='class_directory' and r.get('source')=='general':
+        selected=r.get('scope_query') or {}
+        for field,choices in (('grade','grades'),('subject_id','subjects')):
+            if selected.get(field) and isinstance(r.get(choices),list):
+                values=r.pop(choices);r[choices+'_count']=len(values)
+                r['selected_'+field]=next((value for value in values if str(value.get('id'))==str(selected[field])),None)
     if isinstance(r.get('review'),dict):
         review=r['review'];r['review']={k:v for k,v in review.items() if k not in ('frames','questions')}
         r['review'].update(frame_count=len(review.get('frames',[])),question_count=len(review.get('questions',[])))

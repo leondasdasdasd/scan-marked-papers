@@ -1,11 +1,13 @@
 """Exercise browser transport with a real subprocess and isolated fake CLI."""
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -75,6 +77,45 @@ class BrowserBackendTests(unittest.TestCase):
             with patch.object(sys,'argv',argv),patch.object(paperflow,'execute',return_value={'ok':True,'result':{}}) as run:
                 with contextlib.redirect_stdout(io.StringIO()):self.assertEqual(paperflow.main(),0)
                 self.assertEqual(run.call_args.args[0].base_url,expected)
+
+    def test_large_unicode_script_uses_private_workspace_file_and_cleans_up(self):
+        self.args.browser_backend='playwright';self.args.wrapper=str(self.executable)
+        self.executable.write_text('#!'+sys.executable+'\n'+
+            'import hashlib,json,sys\nfrom pathlib import Path\n'+
+            'p=Path(sys.argv[-1]);data=p.read_bytes()\n'+
+            'Path('+repr(str(self.record))+').write_text(json.dumps({"args":sys.argv[1:],"sha":hashlib.sha256(data).hexdigest(),"file_mode":p.stat().st_mode&511,"directory_mode":p.parent.stat().st_mode&511}))\n'+
+            'print("### Result\\n"+json.dumps({"ok":True,"result":{"saved":True}}))\n')
+        code='async(page)=>/*'+'题'*40000+'*/42'
+        with patch.object(Path,'cwd',return_value=self.root):
+            result=base.browser(self.args,code,'unused')
+        self.assertTrue(result['ok'])
+        request=json.loads(self.record.read_text())
+        self.assertEqual(request['args'][:3],['-s=teacher-test','run-code','--filename'])
+        self.assertEqual(request['sha'],hashlib.sha256(code.encode()).hexdigest())
+        self.assertEqual(request['file_mode'],0o600)
+        self.assertEqual(request['directory_mode'],0o700)
+        code_file=Path(request['args'][-1])
+        self.assertEqual(code_file.parent.parent,self.root)
+        self.assertFalse(code_file.parent.exists())
+
+    def test_large_script_file_is_removed_on_process_error_and_timeout(self):
+        self.args.browser_backend='playwright';self.args.wrapper=str(self.executable)
+        self.executable.write_text('#!'+sys.executable+'\n'+
+            'import json,sys\nfrom pathlib import Path\n'+
+            'Path('+repr(str(self.record))+').write_text(json.dumps(sys.argv[1:]))\n'+
+            'raise SystemExit(1)\n')
+        with patch.object(Path,'cwd',return_value=self.root):
+            result=base.browser(self.args,'a'*150000,'unused')
+        self.assertEqual(result['error']['code'],'browser_command_failed')
+        self.assertFalse(Path(json.loads(self.record.read_text())[-1]).parent.exists())
+        paths=[]
+        def timeout(command,**kwargs):
+            paths.append(Path(command[-1]))
+            self.assertTrue(paths[-1].is_file())
+            raise subprocess.TimeoutExpired(command,66)
+        with patch.object(Path,'cwd',return_value=self.root),patch.object(base.subprocess,'run',side_effect=timeout):
+            with self.assertRaises(subprocess.TimeoutExpired):base.browser(self.args,'a'*150000,'unused')
+        self.assertFalse(paths[0].parent.exists())
 
 
 if __name__=='__main__':unittest.main()

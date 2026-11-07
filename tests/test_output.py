@@ -13,6 +13,21 @@ paperflow = importlib.import_module('paperflow')
 
 
 class OutputTests(unittest.TestCase):
+    def test_filtered_directories_compact_only_already_selected_options(self):
+        full={'ok':True,'result':{'outcome':'class_directory','source':'general',
+            'scope_query':{'grade':'6','subject_id':'14','course_id':'658'},
+            'grades':[{'id':'5','name':'G5'},{'id':'6','name':'G6'}],
+            'subjects':[{'id':'13','name':'语文'},{'id':'14','name':'数学'}],
+            'courses':[{'id':'658','name':'Math G6'}],'classes':[{'id':'937','name':'G6 C4'}]}}
+        data=paperflow.compact(full)['result']
+        self.assertNotIn('grades',data);self.assertNotIn('subjects',data)
+        self.assertEqual(data['selected_grade'],{'id':'6','name':'G6'})
+        self.assertEqual(data['selected_subject_id']['id'],'14');self.assertEqual(data['grades_count'],2)
+        self.assertEqual(data['classes'],full['result']['classes']);self.assertEqual(data['courses'],full['result']['courses'])
+        self.assertEqual(len(full['result']['grades']),2)
+        full['result']['scope_query']={}
+        self.assertIn('grades',paperflow.compact(full)['result']);self.assertIn('subjects',paperflow.compact(full)['result'])
+
     def test_compact_preserves_decision_but_excludes_recovery_signatures(self):
         full = {'ok': True, 'result': {'outcome': 'needs_frame_review',
             'review': {'frame_revision': 'current', 'frames': [{'id': 'one'}], 'questions': []}},

@@ -27,7 +27,9 @@
     const source=plan.source||'teaching';
     const q=scopeQuery(plan);delete q.source;
     const d=await api('GET',source==='teaching'?'/api/classroom/classes':queryPath('/api/classroom/general-options',q,['grade','subject_id','course_id']));
-    return {outcome:'class_directory',source,...redact(d),submitted:false};
+    return {outcome:'class_directory',source,...redact(d),scope_query:q,
+      ...(source==='teaching'&&!(d.classes||[]).length&&!(d.courses||[]).length?
+        {next_action:'query_general_directory'}:{}),submitted:false};
   }
   async function classStudents(p){
     if(!/^\d{1,30}$/.test(p?.class_id||''))fail('invalid_class_id');

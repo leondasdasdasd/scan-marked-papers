@@ -9,6 +9,37 @@ import paperflow
 from test_workflow import TESTS
 
 class WaitEfficiencyTests(unittest.TestCase):
+    def test_only_known_updating_status_has_bounded_read_recovery(self):
+        extra=r'''
+(async()=>{
+ const originalPerformance=global.performance,originalTimeout=global.setTimeout;
+ let now=0;global.performance={now:()=>now};global.setTimeout=(fn,delay)=>{now+=delay;fn();};
+ try{
+  for(const mode of ['once','always','other503','deadline']){
+   now=0;const w=world(),old=global.fetch;let reads=0;
+   global.fetch=async(path,o)=>{
+    if(path.endsWith('/analysis/status')){
+     reads++;
+     if(mode!=='once'||reads===1){w.trace.push([o.method,path]);return {ok:false,status:503,json:async()=>({detail:mode==='other503'?'Other unavailable reason':'分析状态正在更新，请稍后重试'})};}
+     w.finish();w.tasks={analysis:{status:'paused'}};
+    }
+    return old(path,o);
+   };
+   const d=await main(input('run',{timeout:mode==='deadline'?1:30,interval:2,observe_analysis:true}));
+   assert(w.trace.every(([method])=>method==='GET'));
+   if(mode==='once'){assert(d.ok);assert.equal(d.result.outcome,'stopped_readonly');assert.equal(reads,2);assert.equal(now,2000);}
+   else{assert(!d.ok);assert.equal(d.error.code,mode==='other503'?'api_failed':'analysis_status_updating');
+    assert.equal(reads,mode==='always'?3:1);assert.equal(now,mode==='always'?4000:mode==='deadline'?1000:0);}
+  }
+  console.log(JSON.stringify({known503_read_recovery:true,exhausted_requests:3,unknown503_requests:1,writes:0}));
+ }finally{global.performance=originalPerformance;global.setTimeout=originalTimeout;}
+})().catch(e=>{console.error(e.stack);process.exitCode=1;});
+'''
+        js='const SOURCE='+json.dumps(paperflow.source())+';\n'+TESTS.split('(async()=>{let failed=0;')[0]+extra
+        proc=subprocess.run(['node','-'],input=js,text=True,capture_output=True,timeout=15)
+        self.assertEqual(proc.returncode,0,proc.stdout+proc.stderr)
+        print(proc.stdout,end='')
+
     def test_waiting_reuses_headers_backs_off_and_preserves_boundaries(self):
         extra=r'''
 (async()=>{

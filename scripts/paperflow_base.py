@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -204,10 +205,20 @@ def browser(args, code, expression=None):
         node = shutil.which('node')
         if not node or not cli.is_file():
             return {'ok':False,'error':{'code':'existing_playwright_cli_unavailable'}}
-        command = [node, str(cli), '-s='+args.browser_session, 'run-code', code]
+        command = [node, str(cli), '-s='+args.browser_session, 'run-code']
     else:
-        command = [args.wrapper, '-s='+args.browser_session, 'run-code', code]
-    proc = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout+65)
+        command = [args.wrapper, '-s='+args.browser_session, 'run-code']
+    if len(code.encode('utf-8')) > 96 * 1024:
+        # The Docker wrapper mounts the current workspace, not the host /tmp.
+        # Avoid Linux's per-argument limit without exposing student data in argv.
+        with tempfile.TemporaryDirectory(prefix='.paperflow-browser-', dir=Path.cwd()) as directory:
+            code_file = Path(directory) / 'operation.js'
+            code_file.write_text(code, encoding='utf-8')
+            code_file.chmod(0o600)
+            proc = subprocess.run(command+['--filename', str(code_file)],
+                                  capture_output=True, text=True, timeout=args.timeout+65)
+    else:
+        proc = subprocess.run(command+[code], capture_output=True, text=True, timeout=args.timeout+65)
     match = re.search(r'### Result\s*\n(.*?)(?=\n### |\Z)', proc.stdout, re.S)
     if not match:
         return {'ok':False,'error':{'code':'browser_command_failed'},'wall_seconds':round(time.perf_counter()-started,3)}

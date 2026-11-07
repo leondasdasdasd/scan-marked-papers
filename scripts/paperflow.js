@@ -33,13 +33,16 @@ async (input) => {
         response.status===403?'permission_denied':response.status===422?'validation_failed':
         [404,405].includes(response.status)?'contract_mismatch':response.status===429?'rate_limited':'api_failed';
       if(response.status===422&&message==='标准卷选择格式无效')code='invalid_json_body';
+      if(method==='GET'&&path===B+'/analysis/status'&&response.status===503&&
+        message==='分析状态正在更新，请稍后重试')code='analysis_status_updating';
       const classroomAuth=response.status===428&&(serverCode==='classroom_login_required'||serverCode==='GATEWAY_AUTHORIZATION'||
         /云谷登录已失效|课堂会话已失效|课堂登录已失效|云谷账号与当前批阅台账号不一致|学校 AI 登录(?:已失效|已退出|身份已变化|权限已变化)/.test(message||''));
       if(classroomAuth)code='classroom_login_required';
       const next={classroom_login_required:'check_access_then_relogin',invalid_json_body:'verify_json_transport',validation_failed:'inspect_validation_detail',
         version_conflict:'read_current_version',login_required:'restore_authorized_session',
         permission_denied:'verify_identity_scope',contract_mismatch:'verify_deployed_contract',
-        rate_limited:'wait_before_reading_state',api_failed:'read_state_before_retry'};
+        rate_limited:'wait_before_reading_state',api_failed:'read_state_before_retry',
+        analysis_status_updating:'wait_before_reading_state'};
       fail(code,{status:response.status,method,path,retryable:false,next_action:next[code],
         ...(message?{message:message.slice(0,500)}:{}),
         ...(Array.isArray(detail)?{validation_errors:detail.slice(0,8).map(e=>({location:e.loc,type:e.type,message:String(e.msg||'').slice(0,300)}))}:{}),
@@ -61,6 +64,7 @@ async (input) => {
       total_pages:batch.total_pages,analysis_status:a.status,read_version:a.read_version,frame_revision:a.frame_revision,
       catalog_revision:a.catalog_revision,analysis_confirmation_version:batch.analysis_confirmation_version||a.analysis_confirmation_version,
       source_pdf_sha256:a.source_pdf_sha256,reference_student_id:a.reference_student_id,
+      precut_diagnosis:a.status==='awaiting_frames'?frameProblem(a,batch.pages_per_paper):null,
       reference_start:a.reference_start,frames:(a.frames||[]).map(f=>({id:f.id,label:f.label,parent_id:f.parent_id||null,regions:f.regions,source:f.source})),
       questions:(a.questions||[]).map(catalogQuestion),
       reference_pages:Number.isInteger(a.reference_start)?Array.from({length:batch.pages_per_paper},(_,i)=>({page:i,
@@ -449,9 +453,18 @@ async (input) => {
     getUpload:()=>uploadReceipt,setUpload:r=>uploadReceipt=r});
   const analysisRunning=status=>['generating','catalog_confirmed','frames_confirmed','processing'].includes(status);
   async function observeAnalysis(deadline){
-    let previous=null,delay=input.interval*1000;
+    let previous=null,delay=input.interval*1000,updatingReads=0;
     do{
-      const state=await api('GET',B+'/analysis/status');
+      let state;
+      try{state=await api('GET',B+'/analysis/status');updatingReads=0;}
+      catch(error){
+        if(error.code!=='analysis_status_updating'||updatingReads>=2||performance.now()>=deadline)throw error;
+        updatingReads++;
+        transitions.push({action:'analysis_status_read_wait',attempt:updatingReads});
+        await new Promise(resolve=>setTimeout(resolve,Math.min(input.interval*1000,Math.max(0,deadline-performance.now()))));
+        if(performance.now()>=deadline)throw error;
+        continue;
+      }
       if(state.stale||!analysisRunning(state.status))return state;
       if(performance.now()>=deadline)return state;
       const key=JSON.stringify([state.status,state.progress]);
@@ -504,7 +517,7 @@ async (input) => {
     for(let n=0;n<25;n++){
       if(a.status==='awaiting_frames'){
         const problem=frameProblem(a,batch.pages_per_paper);
-        if(problem&&!input.plan?.frames)return {outcome:'needs_precut_recovery',diagnosis:problem,submitted:false};
+        if(problem&&!input.plan?.frames)return {outcome:'needs_precut_recovery',diagnosis:problem,review:snapshot(batch,a),submitted:false};
         if(!input.plan?.frames)return {outcome:'needs_frame_review',review:snapshot(batch,a),submitted:false};
         await apply(batch,a,input.plan.frames,true);a=await full();
       }else if(['generating','catalog_confirmed','frames_confirmed','processing'].includes(a.status)){

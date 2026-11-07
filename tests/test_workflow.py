@@ -184,6 +184,25 @@ for(const state of ['partial','failed'])test(state+' results require targeted re
 test('empty failed precut is a recovery boundary, never a visual approval',async()=>{
  const w=world();w.a.frames=[];w.a.localization_failed_pages=[0];w.a.localization_issues=['Page 1 failed'];
  const d=await main(input('run'));assert.equal(d.result.outcome,'needs_precut_recovery');assert.deepEqual(d.result.diagnosis.retryable_pages,[0]);assert.equal(w.starts,0);assert.equal(w.patches,0);
+ assert.equal(d.result.review.source_pdf_sha256,w.a.source_pdf_sha256);
+ assert.equal(d.result.review.reference_student_id,'p1');assert.equal(d.result.review.reviewed,false);
+ assert.deepEqual(d.result.review.precut_diagnosis,d.result.diagnosis);
+ assert.equal(w.trace.length,4);
+});
+test('snapshot retains failed page diagnosis and valid-page frames without another run',async()=>{
+ const w=world();w.batch.pages_per_paper=2;w.a.localization_failed_pages=[0];w.a.localization_issues=['Page 1 transport failed'];
+ w.a.frames=w.a.frames.map(f=>({...f,regions:f.regions.map(r=>({...r,page:1}))}));
+ const d=await main(input('snapshot'));assert(d.ok);assert.deepEqual(d.result.precut_diagnosis.failed_pages,[0]);
+ assert.equal(d.result.precut_diagnosis.frame_revision,'r1');assert.equal(d.result.frames.length,2);
+ assert(d.result.frames.every(f=>f.regions[0].page===1));assert.equal(w.trace.length,2);
+ w.finish();const completed=await main(input('snapshot'));assert.equal(completed.result.precut_diagnosis,null);
+});
+test('empty teaching directory gives a bounded next action without choosing a different source',async()=>{
+ const w=world(),old=global.fetch;
+ global.fetch=async(path,o)=>path==='/api/classroom/classes'?{ok:true,status:200,json:async()=>({semester_id:'1',classes:[],courses:[]})}:old(path,o);
+ const d=await main(input('classes',{plan:{source:'teaching'}}));assert(d.ok);
+ assert.equal(d.result.next_action,'query_general_directory');assert.equal(d.result.source,'teaching');
+ assert.deepEqual(d.result.classes,[]);assert.equal(w.trace.length,0);
 });
 test('empty precut with no failed-page list uses the known paper page count',async()=>{
  const w=world();w.a.frames=[];w.batch.pages_per_paper=2;
