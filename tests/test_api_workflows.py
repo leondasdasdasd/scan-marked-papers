@@ -63,6 +63,25 @@ test('catalog confirmation and synchronization require dedicated commands',async
  const w=world();for(const op of ['import-submit','import-resume','catalog-confirm-and-start']){
  const d=await main(input('api-call',{plan:{...ev,operation:op}}));assert.equal(d.error.code,'dedicated_command_required');}assert.equal(w.trace.length,0);
 });
+test('a grading roster conflict returns bounded state readback but never dispatches again or masks the original error',async()=>{
+ for(const unavailable of [false,true]){
+  const w=gradingWorld('doubao'),previous=global.fetch;let starts=0,liveReads=0,rosterReads=0;
+  global.fetch=async(path,o)=>{
+   if(path===B+'/start'){starts++;return reply({detail:'关联结果已更新，请刷新后重试'},409);}
+   if(path===B+'/live-state'){
+    liveReads++;if(unavailable&&liveReads===2)return reply({detail:'temporarily unavailable'},503);
+   }
+   if(path===B+'/roster'&&o.method==='GET')rosterReads++;
+   return previous(path,o);
+  };
+  const d=await main(input('run'));assert.equal(d.ok,false);assert.equal(d.error.code,'grading_roster_changed');
+  assert.equal(starts,1);assert.equal(liveReads,2);assert.equal(rosterReads,1);assert.equal(w.gradingStarts,0);
+  assert.equal(d.error.retryable,false);assert.equal(d.error.recovery_readback.status,unavailable?'incomplete':'available');
+  assert.equal(d.error.recovery_readback.roster_revision,1);
+  assert.equal(d.error.next_action,unavailable?'read_live_state_and_roster_before_resuming':'review_returned_state_before_resuming');
+  assert(!JSON.stringify(d.error).includes('student_name'));
+ }
+});
 test('quick grading starts once with no body and waits for the original job',async()=>{
  const w=gradingWorld();let d=await main(input('run'));assert(d.ok);assert.equal(d.result.waiting_for,'grading');assert.equal(w.gradingStarts,1);
  d=await main(input('run',{checkpoint:d.checkpoint}));assert(d.ok);assert.equal(d.result.outcome,'waiting');assert.equal(w.gradingStarts,1);

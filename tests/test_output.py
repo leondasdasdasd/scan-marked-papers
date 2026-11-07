@@ -59,6 +59,19 @@ class OutputTests(unittest.TestCase):
         self.assertNotIn('private geometry', json.dumps(compact))
         self.assertEqual(len(full['result']['review']['frames']), 1)
 
+    def test_repeated_failures_compact_once_without_losing_locations_or_changing_original_receipt(self):
+        shared='第1页批改来源未完整获取，不能记作未作答'
+        full={'ok':True,'result':{'outcome':'needs_targeted_recovery','ready':False,
+            'failed_papers':[{'paper_id':f'p{i}','index':i,'pdf_pages':[i,i],
+                'issues':[shared]+(['another failure'] if i==2 else [])} for i in range(1,22)],
+            'retry_authorized':False}}
+        before=json.dumps(full,ensure_ascii=False);result=paperflow.compact(full)['result']
+        self.assertEqual(result['shared_failure_issues'],[{'issue':shared,'paper_ids':[f'p{i}' for i in range(1,22)]}])
+        self.assertEqual(len(result['failed_papers']),21);self.assertEqual(result['failed_papers'][1]['issues'],['another failure'])
+        self.assertEqual(result['failed_papers'][-1]['pdf_pages'],[21,21]);self.assertFalse(result['ready']);self.assertFalse(result['retry_authorized'])
+        self.assertEqual(json.dumps(full,ensure_ascii=False),before)
+        self.assertEqual(json.dumps(result,ensure_ascii=False).count(shared),1)
+
     def test_follow_returns_to_agent_only_at_review_boundary_and_keeps_checkpoint(self):
         samples = [
             {'ok': True, 'result': {'outcome': 'waiting'}, 'checkpoint': {'step': 1}, 'calls': [{'status': 200, 'ms': 1}]},

@@ -1,7 +1,7 @@
 ---
 name: scan-marked-papers
 metadata:
-  version: "1.10.26"
+  version: "1.10.27"
 description: 在批阅台按教师选择处理 PDF 或已有记录链接：扫描已批试卷或批改未批试卷，并按选择整理题目、检查或同步课堂；支持续做、独立计算题拆分、学生关联与复核。
 ---
 
@@ -63,7 +63,7 @@ description: 在批阅台按教师选择处理 PDF 或已有记录链接：扫�
 | `grading` + xueersi/doubao | 先完成供应商快速批改，仅选择整理时再统一整理；不是 `scan_fast` |
 | `grading` + llm | 智能批改须有等长前置答案卷；仅选择整理时用该模式实际入口，不强套 scan 的参考卷/题框接口 |
 
-仅在需要该模型的阶段核实能力：scan 的 workflows.scan、智能批改的 workflows.grading，供应商批改先查对应 xueersi/doubao 配置，后续模型整理再查该阶段能力。保留原 workflow/engine，不为绕错切模式、重批或清除人工保护。
+仅在需要该模型的阶段核实能力：scan 的 workflows.scan、智能批改的 workflows.grading，供应商批改先查对应 xueersi/doubao 配置，后续模型整理再查该阶段能力。保留原 workflow/engine，不为绕错切模式、重批或清除人工保护。原始阶段done或编排越过该阶段不证明供应商批改内容可用；来源缺失须按实际源定位、已有授权有限恢复及同因停止，不能记未作答、以标准答案代补或重批求过，不新增普遍GET检查门。
 
 ## 首轮质量与交付顺序
 

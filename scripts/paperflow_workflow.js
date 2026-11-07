@@ -157,7 +157,24 @@
     if(unfinished.some(s=>s.status==='failed'||s.error))return {outcome:'needs_grading_recovery',
       failed:unfinished.map(s=>({paper_id:s.id,index:s.index,status:s.status,error:String(s.error||'').slice(0,400)})),submitted:false};
     if(batch.grading_engine==='llm'&&!batch.has_answer_paper)fail('answer_paper_required');
-    await api('POST',B+'/start');transitions.push({action:'grading_started'});
+    try{await api('POST',B+'/start');}
+    catch(error){
+      if(error.code!=='grading_roster_changed'||performance.now()>=deadline)throw error;
+      const reads=await Promise.allSettled([live(),api('GET',B+'/roster')]);
+      const current=reads[0].status==='fulfilled'?reads[0].value:null;
+      const roster=reads[1].status==='fulfilled'?reads[1].value:null;
+      error.details.recovery_readback={status:current&&roster?'available':'incomplete',
+        grading_status:current?.progress?.status??null,
+        grading_task_status:current?.task_control?.grading?.status??null,
+        analysis_status:current?.analysis_status?.status??null,
+        roster_revision:Number.isInteger(roster?.revision)?roster.revision:null,
+        linked_papers:Array.isArray(roster?.papers)?roster.papers.filter(p=>p.student_id).length:null,
+        unlinked_papers:Array.isArray(roster?.papers)?roster.papers.filter(p=>!p.student_id).length:null};
+      if(current&&Number.isInteger(roster?.revision)&&Array.isArray(roster?.papers))
+        error.details.next_action='review_returned_state_before_resuming';
+      throw error;
+    }
+    transitions.push({action:'grading_started'});
     return {outcome:'waiting',waiting_for:'grading',submitted:false};
   }
   function gradingSummary(batch){

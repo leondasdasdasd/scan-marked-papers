@@ -192,6 +192,16 @@ def compact(data):
     if 'frames' in r:r['frame_count']=len(r.pop('frames'))
     # Explicit snapshot/evidence commands are saved with --output for selective reads.
     if 'questions' in r:r['question_count']=len(r.pop('questions'))
+    if isinstance(r.get('failed_papers'),list):
+        groups={}
+        for paper in r['failed_papers']:
+            for issue in dict.fromkeys(i for i in paper.get('issues',[]) if isinstance(i,str)):
+                groups.setdefault(issue,[]).append(paper.get('paper_id'))
+        shared={issue:ids for issue,ids in groups.items() if len(ids)>1}
+        if shared:
+            r['shared_failure_issues']=[{'issue':issue,'paper_ids':ids} for issue,ids in shared.items()]
+            r['failed_papers']=[{**paper,'issues':[i for i in paper.get('issues',[]) if not isinstance(i,str) or i not in shared]}
+                for paper in r['failed_papers']]
     if r.get('check'):
         check=dict(r['check']);counts={}
         for issue in check.get('issues',[]):
