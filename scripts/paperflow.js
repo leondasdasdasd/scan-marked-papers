@@ -86,10 +86,25 @@ async (input) => {
     const text=v=>typeof v==='string'?v:typeof v?.text==='string'?v.text:'';
     const plain=v=>Array.isArray(v)?v.map(plain):v&&typeof v==='object'?
       typeof v.text==='string'?{text:v.text}:Object.fromEntries(Object.entries(v).filter(([k])=>!['html','json'].includes(k)).map(([k,x])=>[k,plain(x)])):v;
-    return {id:q.id,label:q.label,parent_id:q.parent_id||null,conversion_status:q.conversion_status,
+    const media={};let omitted=0;
+    for(const key of ['images','crop_images','figure_images'])if(Array.isArray(q[key])){
+      media[key]=q[key].flatMap(item=>{
+        const source=typeof item==='string'?item:item?.url;
+        try{
+          const url=new URL(source,input.origin);
+          if(typeof source!=='string'||url.origin!==input.origin||url.username||url.password||url.search||url.hash||
+            !url.pathname.startsWith(B+'/analysis/question-images/'))throw Error();
+          return [typeof item==='string'?url.href:{url:url.href,...Object.fromEntries(
+            ['page','context','bbox','reference_start','source_pdf_sha256','crop_version','pixels','sha256','confirmed_frame_revision']
+              .filter(k=>item[k]!==undefined).map(k=>[k,item[k]]))}];
+        }catch{omitted++;return [];}
+      });
+    }
+    return {id:q.id,label:q.label,parent_id:q.parent_id||null,conversion_status:q.conversion_status,...media,
+      ...(omitted?{image_locations_omitted:omitted}:{}),
       ...Object.fromEntries(['stem','standard_answer','standard_answer_source','explanation','group','subquestion_stem',
         'response_definitions','composite','virtual_parent','is_composite','isComposite','businessQuestionTypeId',
-        'question_type_version','question_type_name','question_type_context','regions','source_frame_ids']
+        'question_type_version','question_type_name','question_type_context','regions','reference_regions','figure_regions','source_frame_ids']
         .filter(key=>q[key]!==undefined).map(key=>[key,q[key]])),
       business_question_is_composite:q.business_question?.isComposite??null,
       issue_count:(q.issues||[]).length,question_type_key:q.content?.questionTypeKey,

@@ -139,6 +139,8 @@ JS = r"""async (input) => {
       if(!scopeComplete)remaining.push({code:'SCOPE_INCOMPLETE'});
       if(!coverageMatches)remaining.push({code:'CHECK_COVERAGE_MISMATCH'});
       const pendingMedia=(check.issues||[]).some(i=>['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)&&i.severity==='pending');
+      const blockedMedia=(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity)&&
+        (i.action==='prepare_media'||['MEDIA_CHECK_PENDING','MEDIA_PENDING','MEDIA_NOT_READY','QUESTION_ASSET_INVALID'].includes(i.code)));
       for(const issue of check.issues||[]){
         if(!['blocker','failure','pending'].includes(issue.severity))continue;
         const prior=remaining.find(i=>i.code===issue.code&&i.severity===issue.severity);
@@ -147,7 +149,7 @@ JS = r"""async (input) => {
       result={...summary,scope_complete:scopeComplete,check_coverage_matches:coverageMatches,
         completion:{analysis_completed:summary.analysis_status==='completed'&&!summary.stale,
           structure_verified:summary.structure_complete,identity_complete:summary.unlinked.length===0&&summary.roster_coverage_complete,
-          media_pending:pendingMedia,preflight_passed:ready},remaining,
+          media_pending:pendingMedia,media_blocked:blockedMedia,preflight_passed:ready},remaining,
         preparation_status:preparationStatus,waiting_for_media:preparationStatus==='running'&&pendingMedia&&
           scopeComplete&&coverageMatches&&summary.structure_complete&&!summary.unlinked.length&&
           !(check.issues||[]).some(i=>['blocker','failure'].includes(i.severity)),

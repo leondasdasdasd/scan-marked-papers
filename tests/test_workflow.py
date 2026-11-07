@@ -155,6 +155,31 @@ test('catalog snapshot retains authoritative answers and independent response st
  assert(!JSON.stringify(d.result).includes('not-in-snapshot'));
  assert(!('students' in d.result));assert.equal(w.trace.length,2);
 });
+test('catalog snapshot preserves platform figures and explicitly empty image evidence without extra reads',async()=>{
+ const w=world();w.finish();const path=B+'/analysis/question-images/figure1';
+ const figure={url:path,page:0,context:false,bbox:[.1,.2,.3,.4],reference_start:0,
+  source_pdf_sha256:'a'.repeat(64),crop_version:'rgb-v3',pixels:[600,400],sha256:'b'.repeat(64),confirmed_frame_revision:'r1'};
+ Object.assign(w.a.questions[0],{images:[path],crop_images:[figure],figure_images:[figure],
+  figure_regions:[{page:0,bbox:figure.bbox}],reference_regions:[{page:0,bbox:figure.bbox}]});
+ Object.assign(w.a.questions[1],{images:[],crop_images:[],figure_images:[]});
+ const d=await main(input('snapshot'));assert(d.ok);const [q,empty]=d.result.questions;
+ assert.deepEqual(q.images,[location.origin+path]);
+ assert.deepEqual(q.figure_images,[{...figure,url:location.origin+path}]);
+ assert.deepEqual(q.crop_images,q.figure_images);assert.deepEqual(q.figure_regions,w.a.questions[0].figure_regions);
+ assert.deepEqual(q.reference_regions,w.a.questions[0].reference_regions);
+ assert.deepEqual(empty.figure_images,[]);assert(!('image_locations_omitted' in q));
+ assert.equal(w.trace.length,2);assert(!('students' in d.result));
+});
+test('catalog image projection omits external or credential-bearing locations and reports omission',async()=>{
+ const w=world();w.finish();Object.assign(w.a.questions[0],{images:[
+  B+'/analysis/question-images/local',
+  'https://outside.test/image.png',B+'/analysis/question-images/secret?token=private-fixture',
+  'https://user:password@example.test'+B+'/analysis/question-images/secret',B+'/original']});
+ const d=await main(input('snapshot'));assert(d.ok);const q=d.result.questions[0];
+ assert.equal(q.image_locations_omitted,4);assert.deepEqual(q.images,[location.origin+B+'/analysis/question-images/local']);
+ assert(!JSON.stringify(d.result).includes('private-fixture'));assert(!JSON.stringify(d.result).includes('password'));
+ assert.equal(w.trace.length,2);
+});
 test('9 edits are validated before one write and six independent business questions are checked',async()=>{
  const w=world(),p=plan(w);const d=await main(input('run',{plan:{frames:p}}));
  assert(d.ok);assert(d.result.ready);assert.equal(w.patches,1);assert.equal(w.a.questions.length,7);
@@ -537,6 +562,17 @@ test('identity and media blockers remain separate even when the platform subset 
  assert.equal(d.result.completion.media_pending,true);assert.equal(d.result.completion.preflight_passed,false);
  assert(d.result.remaining.some(i=>i.code==='IDENTITY_PENDING'));assert(d.result.remaining.some(i=>i.code==='MEDIA_CHECK_PENDING'));
  assert.equal(w.media,0);assert.equal(d.result.submitted,false);
+});
+test('invalid asset versions remain explicit media blockers alongside unknown identity without preparation',async()=>{
+ const w=world();w.finish();w.roster.papers[1].student_id=null;
+ w.checkPolicy=()=>({ready:false,status:'blocked',issues:[
+  {code:'QUESTION_ASSET_INVALID',severity:'blocker',action:'prepare_media',question_id:'first'},
+  {code:'NO_SYNC_STUDENTS',severity:'blocker',action:'roster'}]});
+ const d=await main(input('check'));assert(d.ok&&!d.result.ready);
+ assert.equal(d.result.completion.media_pending,false);assert.equal(d.result.completion.media_blocked,true);
+ assert.equal(d.result.completion.identity_complete,false);assert.equal(d.result.completion.preflight_passed,false);
+ assert(d.result.remaining.some(x=>x.code==='QUESTION_ASSET_INVALID'));assert.equal(w.media,0);assert.equal(w.checks,1);
+ assert(!w.trace.some(([m,p])=>p===B+'/lesson-practice/progress'));
 });
 test('contradictory platform ready with pending media cannot report full completion',async()=>{
  const w=world();w.finish();w.checkPolicy=()=>({ready:true,status:'awaiting_confirmation',issues:[{code:'MEDIA_CHECK_PENDING',severity:'pending'}]});
