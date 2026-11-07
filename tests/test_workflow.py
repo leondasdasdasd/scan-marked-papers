@@ -522,6 +522,35 @@ test('exact-name lookup batches explicit permitted classes with bounded reads an
  const invalid=await main(input('class-students',{plan:{...plan,class_ids:['934','934']}}));
  assert.equal(invalid.error.code,'invalid_class_id');assert.equal(unexpected,0);
 });
+test('explicit unlink uses the association command with evidence, revision checks and persisted readback',async()=>{
+ const w=world();
+ const p={revision:1,assignments:['p1','p2'].map(paper_id=>({paper_id,student_id:null,evidence_confirmed:true,evidence_note:'Original image cannot support automatic link'}))};
+ const saved=await main(input('associate',{plan:p}));assert(saved.ok);
+ assert.deepEqual(w.roster.papers.map(p=>p.student_id),[null,null]);
+ assert.equal(w.associationAttempts.length,2);assert.equal(saved.result.revision,3);
+ assert.equal(saved.transitions.filter(t=>t.action==='paper_unassociated').length,2);
+ const noEvidence=world();const invalid=await main(input('associate',{plan:{...p,assignments:[{...p.assignments[0],evidence_confirmed:false}]}}));
+ assert.equal(invalid.error.code,'identity_evidence_required');assert.equal(noEvidence.associationAttempts.length,0);
+ const concurrent=world();concurrent.roster.revision=2;
+ const conflict=await main(input('associate',{plan:p}));assert.equal(conflict.error.code,'roster_version_conflict');
+ assert.equal(conflict.error.current_revision,2);assert.equal(conflict.error.expected_revision,1);
+ assert.deepEqual(conflict.error.current_assignments,[{paper_id:'p1',student_id:'11'},{paper_id:'p2',student_id:'12'}]);
+ assert.equal(concurrent.associationAttempts.length,0);
+ const changed=world(),originalFetch=global.fetch;
+ global.fetch=async(path,options)=>{if(options.method==='PATCH'){changed.associationAttempts.push(path);return reply({...changed.roster,revision:2});}return originalFetch(path,options);};
+ const unpersisted=await main(input('associate',{plan:{...p,assignments:[p.assignments[0]]}}));
+ assert.equal(unpersisted.error.code,'association_not_persisted');
+});
+test('partial analysis returns source failure locations without answers or retrying',async()=>{
+ const w=world();w.a.status='partial';w.a.scan_student_states={p1:'done',p2:'failed'};
+ w.a.students=[{id:'p2',issues:['第 1 页识别失败，可重试：相同模型请求已达到三次传输尝试，不能在恢复时重置重试次数'],incomplete_pages:1,
+  answers:[{answer_text:'private answer'}]}];
+ const d=await main(input('run'));assert(d.ok);assert.equal(d.result.outcome,'needs_targeted_recovery');
+ assert.deepEqual(d.result.student_state_counts,{done:1,failed:1});assert.equal(d.result.failed_papers[0].paper_id,'p2');
+ assert.deepEqual(d.result.failed_papers[0].pdf_pages,[2,2]);assert(d.result.failed_papers[0].issues[0].includes('三次传输尝试'));
+ assert.equal(d.result.retry_authorized,false);assert(!JSON.stringify(d.result).includes('private answer'));
+ assert(w.trace.every(([method])=>method==='GET'));
+});
 
 (async()=>{let failed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+' '+e.message);}}console.log(JSON.stringify({tests:tests.length,passed:tests.length-failed,failed}));process.exitCode=failed?1:0;})();
 '''

@@ -47,5 +47,16 @@ class PixelCoordinatesTests(unittest.TestCase):
         plan={**self.plan,'operations':[{'type':'shift','ids':['one'],'dx':1,'dy':1}]}
         with self.assertRaisesRegex(ValueError,'unsupported_pixel_edit'):normalize_pixel_plan(plan,self.review,'test')
 
+    def test_promoted_children_keep_explicit_ids_and_geometry_then_validate_normally(self):
+        plan=copy.deepcopy(self.plan)
+        plan['operations']=[{'type':'promote_children','id':'parent','children':[
+            {'id':'one','label':'1','regions':[{'page':0,'bbox':[100,50,900,450]}]},
+            {'id':'two','label':'2','regions':[{'page':0,'bbox':[100,500,900,950]}]}]}]
+        result,_=normalize_pixel_plan(plan,self.review,'test')
+        self.assertEqual(result['operations'][0]['children'][0]['regions'][0]['bbox'],[.05,.05,.45,.45])
+        self.assertEqual(result['operations'][0]['children'][1]['id'],'two')
+        paperflow.validate_frame_plan('frames',result)
+        self.assertFalse(result['reference_reviewed'])
+
 
 if __name__=='__main__':unittest.main()

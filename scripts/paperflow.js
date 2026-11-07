@@ -234,21 +234,25 @@ async (input) => {
     let roster=await api('GET',B+'/roster');
     if(!Array.isArray(plan.assignments)||plan.assignments.length>50)fail('invalid_associations');
     const target=JSON.stringify(plan.assignments.map(op=>[op.paper_id,op.student_id]));
-    if(roster.revision!==plan.revision&&!(associations?.target===target&&associations.after_revision===roster.revision))fail('roster_version_conflict');
+    if(roster.revision!==plan.revision&&!(associations?.target===target&&associations.after_revision===roster.revision))
+      fail('roster_version_conflict',{expected_revision:plan.revision,current_revision:roster.revision,
+        current_assignments:plan.assignments.map(op=>({paper_id:op.paper_id,
+          student_id:(roster.papers||[]).find(p=>p.id===op.paper_id)?.student_id??null})),next_action:'read_roster_and_rebuild_plan'});
     const pids=new Set(),sids=new Set();
     for(const op of plan.assignments){
       const paper=(roster.papers||[]).find(p=>p.id===op.paper_id);
-      if(!paper||!roster.students.some(s=>s.id===op.student_id)||pids.has(op.paper_id)||sids.has(op.student_id)||
+      const clearing=op.student_id===null;
+      if(!paper||(!clearing&&!roster.students.some(s=>s.id===op.student_id))||pids.has(op.paper_id)||(!clearing&&sids.has(op.student_id))||
         op.evidence_confirmed!==true||typeof op.evidence_note!=='string'||!op.evidence_note.trim())fail('identity_evidence_required');
-      if((roster.papers||[]).some(p=>p.id!==op.paper_id&&p.student_id===op.student_id))fail('association_already_occupied');
-      pids.add(op.paper_id);sids.add(op.student_id);
+      if(!clearing&&(roster.papers||[]).some(p=>p.id!==op.paper_id&&p.student_id===op.student_id))fail('association_already_occupied');
+      pids.add(op.paper_id);if(!clearing)sids.add(op.student_id);
     }
     const saved=[];
     for(const op of plan.assignments){
       if((roster.papers||[]).find(p=>p.id===op.paper_id)?.student_id===op.student_id)continue;
       roster=await api('PATCH',B+'/roster/'+op.paper_id,{revision:roster.revision,student_id:op.student_id});saved.push(op.paper_id);
       associations={target,after_revision:roster.revision};
-      transitions.push({action:'paper_associated',paper_id:op.paper_id});
+      transitions.push({action:op.student_id===null?'paper_unassociated':'paper_associated',paper_id:op.paper_id});
     }
     const read=await api('GET',B+'/roster');
     if(plan.assignments.some(op=>!read.papers.some(p=>p.id===op.paper_id&&p.student_id===op.student_id)))fail('association_not_persisted');
@@ -457,6 +461,20 @@ async (input) => {
   const workflow=workflowFactory({input,api,fail,full,selectScope,inspectOrCheck,control,transitions,
     getUpload:()=>uploadReceipt,setUpload:r=>uploadReceipt=r});
   const analysisRunning=status=>['generating','catalog_confirmed','frames_confirmed','processing'].includes(status);
+  function recoverySummary(a,batch){
+    const states=a.scan_student_states||{},counts={},failed=[];
+    for(const paper of batch.students||[]){
+      const state=states[paper.id]||'unknown';counts[state]=(counts[state]||0)+1;
+      if(state!=='failed')continue;
+      const result=(a.students||[]).find(s=>s.id===paper.id);
+      failed.push({paper_id:paper.id,index:paper.index,pdf_pages:[paper.start+1,paper.start+batch.pages_per_paper],
+        issues:(result?.issues||[]).filter(x=>typeof x==='string').slice(0,3).map(x=>x.slice(0,500)),
+        incomplete_pages:result?.incomplete_pages??null});
+    }
+    return {student_state_counts:counts,failed_papers:failed,
+      ...(a.error||a.catalog_error?{analysis_error:String(a.error||a.catalog_error).slice(0,500)}:{}),
+      retry_authorized:false,next_action:'inspect_failed_papers_before_retry'};
+  }
   async function observeAnalysis(deadline){
     let previous=null,delay=input.interval*1000,updatingReads=0;
     do{
@@ -552,7 +570,8 @@ async (input) => {
         const check=await inspectOrCheck('check',{batch});
         return {...check,...(check.waiting_for_media?{outcome:'waiting',waiting_for:'media',analysis_status:a.status}:{}),visual_review_performed:!!receipt||catalogReceipt?.state==='accepted'||input.plan?.reference_reviewed===true,
           expected_granularity_verified:!!expected,review_tasks:reviewTasks(check,a,batch),submitted:false};
-      }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,submitted:false};
+      }else return {outcome:['partial','failed'].includes(a.status)?'needs_targeted_recovery':'unknown_stage',analysis_status:a.status,
+        ...(['partial','failed'].includes(a.status)?recoverySummary(a,batch):{}),submitted:false};
       const key=JSON.stringify([a.status,a.frame_revision,a.catalog_revision]);
       if(visited.has(key))return {outcome:'no_progress',analysis_status:a.status,submitted:false};
       visited.add(key);

@@ -168,12 +168,16 @@ def execute(args,action,plan=None,checkpoint=None):
     return result
 
 
+def http_metrics(data):
+    calls=data.get('calls',[])
+    return {'count':len(calls),'failed':sum(c.get('status',0)>=400 for c in calls),
+            'request_ms_sum':sum(c.get('ms',0) for c in calls)}
+
+
 def compact(data):
     """Keep decision data, not recovery signatures or repeated rich-text payloads."""
     result={k:v for k,v in data.items() if k not in ('checkpoint','calls')}
-    calls=data.get('calls',[])
-    result['http']={'count':len(calls),'failed':sum(c.get('status',0)>=400 for c in calls),
-                    'request_ms_sum':sum(c.get('ms',0) for c in calls)}
+    result['http']=http_metrics(data)
     r=dict(result.get('result') or {})
     if r.get('outcome')=='class_directory' and r.get('source')=='general':
         selected=r.get('scope_query') or {}
@@ -590,6 +594,7 @@ def main():
         data=local_error(exc)
         if data.get('error',{}).get('code')=='file_path_conflict':
             print(json.dumps(data,ensure_ascii=False));return 1
+    data['http']=http_metrics(data)
     if args.output:
         atomic_json(args.output,data)
     shown=data if args.verbose else compact(data)

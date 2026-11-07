@@ -34,7 +34,7 @@ def normalize_pixel_plan(plan,review_path,batch_id):
     for op in result.get('operations',[]):
         if op.get('type')=='set':
             if 'regions' in op:regions(op['regions'])
-        elif op.get('type') in ('split','replace_page'):
-            for frame in op.get('children' if op['type']=='split' else 'frames',[]):regions(frame.get('regions'))
+        elif op.get('type') in ('split','promote_children','replace_page'):
+            for frame in op.get('frames' if op['type']=='replace_page' else 'children',[]):regions(frame.get('regions'))
         else:raise ValueError('unsupported_pixel_edit')
     return result,[review_path.parent/f'raw-page-{page+1}.png' for page in sizes]

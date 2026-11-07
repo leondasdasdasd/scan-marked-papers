@@ -215,7 +215,7 @@ api-list离线列出83项操作的purpose、method/path、允许query、required
 
 写计划增加body（仅JSON传输）、`evidence_confirmed:true`和非空evidence_note；transport=empty的操作完全不传body，不用`{}`替代。review类写入还须`expected.read_version`与当前full analysis的read_version一致，工具才运行时注入review_token；task-stop须body.kind和`expected.started_at`匹配当前任务再运行时取控制token。其他操作按真实revision/source_version等字段核对。任何token都禁止人工填入计划或输出。
 
-GET返回api_result/data；成功写入返回api_saved/data，PATCH/PUT另附权威readback。stdout大结果为摘要，核实具体持久化字段时从全局--output的完整去凭证结果读取，不能把摘要缺字段误判为服务端未返回。session摘要保留ok、xueersi_configured、doubao_configured、model_configured、当前model、models_count及已配置models的workflows/capabilities；model_capabilities_included=false表示本次未包含模型能力，不能据此判定模型不可用。能力字段不足时先定点读取本次--output完整结果，不立即改走页面重查；按所需阶段核验，不自动选择供应商。HTTP200不代表后续任务或全批业务完成。upload、目录确认及imports属于special操作，普通api-call返回dedicated_command_required，分别用upload/catalog/sync，不改registry或手写请求绕过。只有用户本次明确接续时才在适用启动/恢复计划写resume_authorized=true；只读请求不恢复停止任务。
+GET返回api_result/data；成功写入返回api_saved/data，PATCH/PUT另附权威readback。stdout大结果为摘要，核实具体持久化字段时从全局--output的完整去凭证结果读取，不能把摘要缺字段误判为服务端未返回。标准业务命令的--output回执保留原calls，并含与stdout一致的http摘要（count、failed、request_ms_sum）；请求耗时之和不等于墙钟耗时，尤其不能将并发请求相加当作实际等待时间。session摘要保留ok、xueersi_configured、doubao_configured、model_configured、当前model、models_count及已配置models的workflows/capabilities；model_capabilities_included=false表示本次未包含模型能力，不能据此判定模型不可用。能力字段不足时先定点读取本次--output完整结果，不立即改走页面重查；按所需阶段核验，不自动选择供应商。HTTP200不代表后续任务或全批业务完成。upload、目录确认及imports属于special操作，普通api-call返回dedicated_command_required，分别用upload/catalog/sync，不改registry或手写请求绕过。只有用户本次明确接续时才在适用启动/恢复计划写resume_authorized=true；只读请求不恢复停止任务。
 
 ## grading编排与明确同步
 
@@ -239,7 +239,7 @@ sync必须同时有本次明确同步授权、`--authorize-sync`和真实计划�
 | `needs_precut_recovery` | run同时携带 `review` snapshot，优先复用它；有本地原PDF时可配对传 `--review-pdf`/`--review-out` 生成图包，无须为渲染另拉snapshot。snapshot和生成图包仍不算实际审阅。读 diagnosis 的失败页、issues、revision、retryable_pages；有证据才定点重试，空框候选页不代表已确认失败，不全页空跑。awaiting_frames 下同因重试无效，实际审图后优先用 frames --edits 的 replace_page 保存失败页全部独立题框，CLI保留其他页及ID；跨页题框需显式编辑，不可整页覆盖。回读失败页真实清除、全参考页已审后才正常确认，不伪造审图、不强confirm。仅兼容旧运行时时用 api-call frames-save 按当前 revision 完整保存全套框。无能力或服务端仍拒绝就保留具体恢复点；没有 frames add 操作 |
 | `needs_frame_review` | 复用 run 生成的 review 包，实际核对全部参考页，一次整理必要框修改，再应用并确认。没有包且已有本地原 PDF 时才单独 review，已有元数据优先 --metadata 离线复用；已有链接无本地 PDF 时按原技能读取参考页，不索要或重传原卷 |
 | `needs_catalog_review` | 一次读取精简目录正文、选项ID与逐空定义，对照已审参考图核对内容、答案和独立题结构；需要修改先集中修改并用 catalog-save-draft/catalog-save-review 保存一次，回读新版本与实际任务状态，历史 ready 作废；实际审完后用catalog --plan确认，再run |
-| `needs_targeted_recovery`、partial/failed 或检查阻塞 | 先读具体失败与 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |
+| `needs_targeted_recovery`、partial/failed 或检查阻塞 | run 的 partial/failed 回执直接复用已读状态，附 student_state_counts、failed_papers（paper_id/index/pdf_pages、最多3条且每条最多500字的 issues、incomplete_pages）及可得 analysis_error，无额外 GET、无答案、无自动重试，retry_authorized=false。先用该定位，已有信息足够时不重复 snapshot/summary/diagnose；摘要不足才定点补证。诊断不解决服务器失败，也不授权绕过同请求传输上限。再读必要 review_tasks，以 evidence 取受影响卷/题定位，实际核对必要原卷证据；仅作答结构问题可走 responses，其他按真实恢复接口。不默认重跑全批 |
 | `needs_duplicate_review` | 本次范围存在重复学生卷；依据真实证据确定取舍，按当前范围确认契约处理，不自动任选、不提交确认 |
 | `identity_pending` | 全批仍有未关联卷；复用 roster 对账定位，清楚身份有证据才整包关联，模糊者直接暂留。保留 remaining 中媒体/结构/范围等其他未完成项，不把 subset ready 或补姓名当作全批通过 |
 | `waiting` | 任务仍在进行；`waiting_for=media` 表示媒体准备仍在运行，也可正常 follow。沿用原计划与 checkpoint，或按 emit/evaluate/collect 单轮接续；emit 各轮共用该阶段本轮累计墙钟预算，不重置。正常 running 的进度暂不变仍等待，只有明确重复错误或不可恢复诊断才提前停止；到限时交付处理中/未完成、进度、链接和原 checkpoint，不重复启动任务 |
@@ -261,7 +261,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --check
 
 **题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。第一次保存前集中逐页逐框审清完整题干、全部选项、分数上下界、公共说明、作答空间与批注归属，不以统一 padding 代替边界判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
 
-像素计划使用 `frames --edits <计划> --pixel-review <本CLI生成的review.json>`，计划必须声明 `coordinate_space:"pixels"`，region 的 page 仍为 0-based 相对页，bbox 为原始 PNG 像素 `[left,top,right,bottom]`；CLI核对同batch/source_pdf_sha256/frame_revision/reference_student_id及review.json记录的配对raw-page-N.png SHA，按PNG实际IHDR宽高转换为0..1。仅支持set/split/replace_page的regions，不支持shift/promote_children；不缩放、裁切、夹紧、识别题或自动padding/审阅。仍须实际严格审图并遵守全部本地及服务端保护；review与原图受防覆盖保护。普通归一化计划用法不变。
+像素计划使用 `frames --edits <计划> --pixel-review <本CLI生成的review.json>`，计划必须声明 `coordinate_space:"pixels"`，region 的 page 仍为 0-based 相对页，bbox 为原始 PNG 像素 `[left,top,right,bottom]`；CLI核对同batch/source_pdf_sha256/frame_revision/reference_student_id及review.json记录的配对raw-page-N.png SHA，按PNG实际IHDR宽高转换为0..1。支持set/split/promote_children/replace_page的regions，promote_children与split均只转换显式children[].regions，不改变子ID、数量或层级，不自动生成子框；仍拒绝shift。不缩放、裁切、夹紧、识别题或自动padding/审阅。仍须实际严格审图并遵守全部本地及服务端保护；review与原图受防覆盖保护。普通归一化计划用法不变。
 
 operations 支持：
 
@@ -282,7 +282,7 @@ operation = {"type": "replace_page", "page": 0, "frames": reviewed_page_0_frames
 
 **独立计算题。** N个独立算式最终必须是N道可分别查看/订正的业务叶题，不是N框仍一题、N个空或组合题。填写真实expected_leaf_labels，CLI保存并续验粒度目标；核对叶题标签/数量、parent_id=null，排除content.children、composite/virtual_parent、is_composite/isComposite、business_question.isComposite及题型目录isComposite所代表的合题，且无额外父标题题。expected_granularity_verified只是程序核对，不能替代实际目录与必要图证核验。
 
-**关联。** 计划为 `{revision:实时roster版本,assignments:[{paper_id,student_id,evidence_confirmed:true,evidence_note:必要证据摘要}]}`。初次常规查看已有清楚卷面与名单证据的整包应用，脚本中的 true 不是证据。第一次常规查看已模糊或未识别者直接暂留，不放大、新增 OCR、换识别方式或凭剩余名单试探；用户提供新证据或本次明确要求重新识别时，按其范围重新判断，仍不猜人。`roster` 的 exact_name_candidates 只是已有识别名的同名列表，不构成身份确认。继续不依赖该身份的允许步骤，run 在 completed 阶段才应用 associations，其他真实阶段按原技能处理，不能改 scope 求通过。
+**关联。** 计划为 `{revision:实时roster版本,assignments:[{paper_id,student_id,evidence_confirmed:true,evidence_note:必要证据摘要}]}`。解除有证据确认的错误关联时用 `associate` 显式传 `student_id:null`，可同包解除多份，无须改走api-call；每项仍须证据、当前revision、既有guard校验及持久化回读，不因null绕过保护。初次常规查看已有清楚卷面与名单证据的整包应用，脚本中的 true 不是证据。第一次常规查看已模糊或未识别者直接暂留，不放大、新增 OCR、换识别方式或凭剩余名单试探；用户提供新证据或本次明确要求重新识别时，按其范围重新判断，仍不猜人。`roster` 的 exact_name_candidates 只是已有识别名的同名列表，不构成身份确认。继续不依赖该身份的允许步骤，run 在 completed 阶段才应用 associations，其他真实阶段按原技能处理，不能改 scope 求通过。
 
 ## 目录确认计划
 
@@ -315,6 +315,7 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 | `invalid_json_body` | 422 原文“标准卷选择格式无效”；先核对JSON传输/序列化，使用内置脚本，不猜键名。该路由 JSON 解析失败或 body 非对象才触发，ID不存在是另一条错误，不能据此断言平台故障 |
 | `validation_failed` | 按真实 detail 修正有证据的格式/字段，不盲试变体 |
 | `grading_roster_changed` | 仅POST本batch/start的409原文“关联结果已更新，请刷新后重试”对应此诊断；按next_action=read_live_state_and_roster_before_resuming只读live状态与roster，核实当前任务/范围后正常接续原batch，不自动重放、不换key或模型 |
+| `roster_version_conflict` | 返回expected_revision、current_revision及仅本计划paper的current_assignments；按read_roster_and_rebuild_plan核实当前关联、证据与剩余范围后重建计划，不自动改revision或重放旧包 |
 | `version_conflict` | 回读当前版本、范围和实际保存内容，再判断剩余动作 |
 | `classroom_login_required` | 先 access，再按诊断 relogin 一次；包括HTTP200业务体的已知428失效响应，其他428不推断为登录问题 |
 | `origin_mismatch` | 按expected_origin、actual_origin与next_action=verify_browser_origin_and_login核对当前页面及本次目标；两者仅为origin，不记录含query/token的完整URL。错源不等于账号失效，不自动导航；确需登录恢复时沿既有授权流程处理，回到目标origin后重新access核验 |

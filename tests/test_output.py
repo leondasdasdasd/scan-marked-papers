@@ -76,6 +76,7 @@ class OutputTests(unittest.TestCase):
             self.assertEqual(execute.call_count, 3)
             self.assertEqual(execute.call_args_list[1].args[3], {'step': 1})
             self.assertEqual(json.loads(stdout.getvalue())['http']['count'], 3)
+            self.assertEqual(json.loads(output.read_text())['http'],json.loads(stdout.getvalue())['http'])
             self.assertEqual(json.loads(output.read_text())['checkpoint'], {'step': 3})
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
