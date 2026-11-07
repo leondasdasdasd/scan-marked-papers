@@ -302,13 +302,18 @@ async function attachState(state) {
   }catch(error){cdp.close();throw error;}
 }
 
-async function dispose(state) {
-  let cdp;
+async function dispose(state,{verifyContext=false}={}) {
+  let cdp,contextDisposed=!state.context;
   try {
     cdp=await Cdp.connect(state.browser.endpoint);
     if(state.context)await cdp.send('Target.disposeBrowserContext',{browserContextId:state.context}).catch(()=>{});
+    if(verifyContext&&!state.browser.owned&&state.context) {
+      const contexts=await cdp.send('Target.getBrowserContexts');
+      contextDisposed=Array.isArray(contexts.browserContextIds)&&!contexts.browserContextIds.includes(state.context);
+    }
     if(state.browser.owned)await cdp.send('Browser.close').catch(()=>{});
   }catch{}finally{cdp?.close();}
+  if(verifyContext&&!state.browser.owned&&!contextDisposed)fail('isolated_cleanup_incomplete');
   if(state.browser.owned&&state.browser.profile) {
     const address=new URL(state.browser.endpoint);
     address.protocol=address.protocol==='wss:'?'https:':'http:';
@@ -452,17 +457,24 @@ async function status(input) {
 
 async function close(input) {
   const file=await stateFile(input),state=await loadState(input);
+  let logoutAttempted=false,logoutHttpStatus=null;
   if(state) {
     let attached;
     try {
       attached=await attachState(state);
       const live=await browserIdentity(attached.cdp,attached.sessionId,input.origin);
-      if(live.ok&&sameIdentity(live.user,state.user))await runtime(attached.cdp,attached.sessionId,
-        '(async()=>{const r=await fetch("/api/logout",{method:"POST",credentials:"same-origin",redirect:"error"});return {status:r.status};})()');
+      if(live.ok&&sameIdentity(live.user,state.user)) {
+        logoutAttempted=true;
+        const logout=await runtime(attached.cdp,attached.sessionId,
+          '(async()=>{const r=await fetch("/api/logout",{method:"POST",credentials:"same-origin",redirect:"error"});return {status:r.status};})()');
+        logoutHttpStatus=Number.isInteger(logout?.status)?logout.status:null;
+      }
     }catch{}finally{attached?.cdp.close();}
-    await dispose(state);await fs.unlink(file);
+    await dispose(state,{verifyContext:true});await fs.unlink(file);
   }
-  return {ok:true,result:{outcome:'isolated_session_closed',session:input.session,source_browser_modified:false}};
+  return {ok:true,result:{outcome:state?'isolated_session_closed':'isolated_session_missing',session:input.session,
+    isolated_record_found:!!state,logout_attempted:logoutAttempted,logout_http_status:logoutHttpStatus,
+    native_browser_cleanup_performed:false,source_browser_modified:false}};
 }
 
 export async function main(input) {

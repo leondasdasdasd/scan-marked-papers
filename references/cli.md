@@ -64,7 +64,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --brows
 
 ### 尚无任务浏览器时启动现有运行时
 
-已有活跃任务会话不重新打开。尚无可用命名会话时，可用 `python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --browser-session <本轮任务名> browser-open`，支持全局 `--wrapper`/`--playwright-cli`，以及子命令 `--executable <已有浏览器绝对路径>`。默认云 wrapper 且已有 Docker 可用时，命令只读探查容器 `/ms-playwright` 下现成 Chromium，使用任务级受限临时配置选择已有最高版本，完成、异常或超时均清理；自定义 wrapper/direct CLI 不擅自探 Docker。不安装运行时、不改共享配置、不迁移凭证；打开页面不证明登录，之后用 access 核验，真实失败按诊断采用现成可用方式。doctor 保持离线，不启动浏览器。
+已有活跃任务会话不重新打开。尚无可用命名会话时，可用 `python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --browser-session <本轮任务名> browser-open`，支持全局 `--wrapper`/`--playwright-cli`，以及子命令 `--executable <已有浏览器绝对路径>`。默认云 wrapper 且已有 Docker 可用时，命令只读探查容器 `/ms-playwright` 下现成 Chromium，使用任务级受限临时配置选择已有最高版本，完成、异常或超时均清理临时启动配置，这不关闭命名浏览器；自定义 wrapper/direct CLI 不擅自探 Docker。不安装运行时、不改共享配置、不迁移凭证；打开页面不证明登录，之后用 access 核验，真实失败按诊断采用现成可用方式。doctor 保持离线，不启动浏览器。本次创建的Playwright命名会话结束时用同一后端/任务名执行 `browser-close`：仅关闭所选命名会话，不发logout、不关闭共享容器；存在isolated控制记录则拒绝并指向session-close。关闭超时保留不确定状态，核对原命名会话，不将超时当已关闭，也不转为关闭共享资源。
 
 ### 独立会话的确定性接入
 
@@ -94,7 +94,7 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --brows
 python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --browser-session <本次任务名> session-close
 ```
 
-任务结束执行 `session-close`：仅退出目标应用会话，不跟随 SSO 全局 logout_url，销毁本次隔离上下文；脚本自建的浏览器与临时目录一并清理，已有目标浏览器仅清理本次上下文。源浏览器、源登录态和其他页面保持原状。`isolated_cleanup_incomplete` 表示清理尚未完成，保留控制记录，用原任务名再次 session-close，不手删记录或关闭源浏览器来消除错误。处理中需要续做时保留独立会话和原 checkpoint；身份或学校变化停止写入。
+隔离会话结束执行 `session-close`：无控制记录返回 `isolated_session_missing`，不代表Playwright命名浏览器已清理。存在记录时尝试注销目标应用，不跟随SSO全局logout_url，以logout_attempted/logout_http_status报告注销尝试与HTTP结果，不能用资源清理成功替代注销确认；随后清理本次隔离上下文、脚本自建浏览器及临时目录，已有外部目标浏览器仅清理本次上下文并回读确认。源浏览器、源登录态和其他页面保持原状。上下文销毁未确认或其他资源清理未完成返回 `isolated_cleanup_incomplete` 并保留恢复记录，用原任务名再次session-close，不手删记录或关闭源浏览器来消除错误。处理中需要续做时保留独立会话和原 checkpoint；身份或学校变化停止写入。
 
 可选全局参数：`--timeout`（1–180 秒，默认 45）、`--interval`（2–30 秒，默认 5）、`--checkpoint <本地JSON>`、`--output <完整结果JSON>`、`--verbose`。独立会话连接成功后，沿用同一任务名；以下由智能体替换为实际值：
 
@@ -159,7 +159,8 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 | `browser-open [--executable <已有浏览器绝对路径>]` | 尚无任务会话时用已有 Playwright 运行时打开命名会话；不安装、不迁移认证、不证明登录，随后 access；已有活跃会话不重开 |
 | `session-connect [--source-url <CDP入口>] [--source-target <ID>] [--target-url <独立CDP入口>] [--executable <已有浏览器路径>]` | 复用已核验独立会话，或定点内存迁移必要登录态；不操作源页面、不导出凭证；需全局 browser-session，无需 batch |
 | `session-status` | 核验本次独立上下文、同一身份及课堂会话，读 connected/outcome；不以 ok=true 代替 connected=true |
-| `session-close` | 仅注销目标应用会话并清理本次上下文/自建浏览器，不跟随全局退出、不关闭源浏览器 |
+| `browser-close` | 仅关闭本次所选Playwright命名会话，不发logout、不关共享容器；有isolated记录则拒绝并指向session-close，超时保留不确定 |
+| `session-close` | 仅处理有记录的隔离会话，分别报告注销尝试/HTTP状态与资源清理；无记录为isolated_session_missing，不证明命名浏览器已关闭；不跟随全局退出、不关闭源浏览器 |
 | `access` | 只读当前批阅台身份及课堂会话，不调用模型能力；返回 principal、classroom_valid 与访问诊断，将非敏感身份回执保存到 checkpoint，身份/学校变化时停写；支持 emit |
 | `relogin` | 命令执行时启动平台既有强制登录导航，授权链接仅在浏览器内存中使用；emit 仅生成，evaluate 执行后才导航。导航已启动不等于恢复成功，之后须回原 origin 用 access 核验 |
 | `roster` | 一次读批次与名单，输出 revision、papers、linked/unlinked 及未关联卷的份号/PDF页码/姓名状态/原图定位；同名候选仅来自已有识别名，不提供剩余名单猜人；支持 emit |
@@ -326,7 +327,7 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 | `pdf_read_timeout` | 停止重复文件检查；使用现有已授权文件工具或可读副本做一次验证，不推断权限根因，不重传已成功材料 |
 | `source_browser_selection_required`、`source_context_selection_required` | 多个真实来源未能唯一确定；从现有工具取得准确 CDP/target 定位后再连接，不猜来源或让老师配置参数 |
 | `source_identity_changed`、`source_identity_mismatch`、`isolated_identity_mismatch`、`isolated_identity_changed` | 来源、目标或已记录身份不一致；停止写入，不换身份或环境绕过 |
-| `isolated_session_missing`、`isolated_session_closed`、`isolated_session_expired` | 独立会话缺失或失效；先 session-status 核实，尝试一次 session-connect 续接原身份；无能力则保留恢复点，不静默回退用户页面或重放写请求 |
+| `isolated_session_missing`、`isolated_session_closed`、`isolated_session_expired` | 独立会话缺失或失效；session-close无记录时的missing不代表原生Playwright浏览器已关闭，任务结束不因此新建隔离会话；先 session-status 核实，尝试一次 session-connect 续接原身份；无能力则保留恢复点，不静默回退用户页面或重放写请求 |
 | `isolated_cleanup_incomplete` | 本次目标上下文/自建浏览器或临时目录清理未完成；保留控制记录，以原任务名 session-close 重试，不手删记录、不关源浏览器 |
 | `invalid_api_response` | 返回不是有效业务响应；按 read_state_before_retry 先只读查当前状态，不重放写请求 |
 | `batch_not_found` | 本批接口 404 且原文“考试不存在或已删除”；按 verify_existing_batch_link 核实原链接，不猜路由或盲查已删 ID；其他 404 不据此推断 |

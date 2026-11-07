@@ -56,5 +56,26 @@ class BrowserOpenTests(unittest.TestCase):
         self.assertEqual(r['error']['code'],'browser_start_uncertain');self.assertFalse(r['error']['retryable'])
         self.assertFalse(paths[0].parent.exists())
 
+    def test_close_targets_only_selected_session_and_suppresses_raw_output(self):
+        reply=subprocess.CompletedProcess([],0,'Browser closed https://login.test/?ticket=must-not-leak','')
+        with patch.object(browser.subprocess,'run',return_value=reply) as run:
+            r=browser.close_browser(self.args)
+        self.assertTrue(r['ok']);self.assertEqual(r['result']['outcome'],'browser_closed')
+        self.assertEqual(run.call_args.args[0],[str(self.wrapper),'-s=new-task','close'])
+        self.assertFalse(r['result']['application_logout_performed'])
+        self.assertFalse(r['result']['shared_runtime_stopped'])
+        self.assertNotIn('must-not-leak',json.dumps(r))
+
+    def test_close_respects_isolated_owner_and_does_not_launch_native_tool(self):
+        with patch('paperflow_session.available',return_value=True),patch.object(browser.subprocess,'run') as run:
+            r=browser.close_browser(self.args)
+        self.assertEqual(r['error']['next_action'],'session-close');run.assert_not_called()
+
+    def test_close_timeout_never_retries_or_reports_success(self):
+        with patch.object(browser.subprocess,'run',side_effect=subprocess.TimeoutExpired('close',17)) as run:
+            r=browser.close_browser(self.args)
+        self.assertEqual(r['error']['code'],'browser_close_uncertain')
+        self.assertFalse(r['error']['retryable']);self.assertEqual(run.call_count,1)
+
 
 if __name__=='__main__':unittest.main()

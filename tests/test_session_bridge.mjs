@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {Cdp,main,originOf,selectCookies} from '../scripts/paperflow_session.mjs';
 
@@ -38,7 +39,47 @@ test('status and close with no owned session do not discover or launch browsers'
   try {
     const input={origin:'http://127.0.0.1:1',session:'empty',cache_dir:tmp};
     assert.equal((await main({...input,action:'status'})).result.connected,false);
-    assert.equal((await main({...input,action:'close'})).result.outcome,'isolated_session_closed');
+    const result=await main({...input,action:'close'});
+    assert.equal(result.result.outcome,'isolated_session_missing');
+    assert.equal(result.result.isolated_record_found,false);
+    assert.equal(result.result.logout_attempted,false);
+    assert.equal(result.result.native_browser_cleanup_performed,false);
+  }finally{await fs.rm(tmp,{recursive:true,force:true});}
+});
+
+test('failed external context cleanup retains recovery state and never closes the browser',async t=>{
+  const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'paperflow-close-failure-'));
+  const origin='http://127.0.0.1:1',session='external',context='task-context',target='task-target';
+  const directory=path.join(tmp,'scan-marked-papers-sessions');await fs.mkdir(directory);
+  const file=path.join(directory,createHash('sha256').update(origin+'\0'+session).digest('hex').slice(0,24)+'.json');
+  const user={id:'fixture-teacher',school_id:'fixture-school',identity:'employee'};
+  const state={schema:1,origin,session,user,context,target,browser:{owned:false,endpoint:'ws://127.0.0.1:1/browser'}};
+  const commands=[];let rejectDispose=true,missingTarget=false;
+  t.mock.method(Cdp,'connect',async()=>({close(){},async send(method,params){
+    commands.push(method);
+    if(method==='Target.getTargets')return {targetInfos:missingTarget?[]:[{targetId:target,browserContextId:context}]};
+    if(method==='Target.attachToTarget')return {sessionId:'fixture-session'};
+    if(method==='Runtime.evaluate')return {result:{value:params.expression.includes('/api/logout')?{status:503}:{ok:true,user}}};
+    if(method==='Target.disposeBrowserContext'&&rejectDispose)throw Error('fixture cleanup failure');
+    if(method==='Target.getBrowserContexts')return {browserContextIds:rejectDispose?[context,'unrelated-context']:['unrelated-context']};
+    return {};
+  }}));
+  try {
+    await fs.writeFile(file,JSON.stringify(state));
+    const first=await main({action:'close',origin,session,cache_dir:tmp});
+    assert.equal(first.ok,false);assert.equal(first.error.code,'isolated_cleanup_incomplete');
+    assert.deepEqual(JSON.parse(await fs.readFile(file,'utf8')),state);
+    assert.ok(!commands.includes('Browser.close'));
+    rejectDispose=false;
+    const second=await main({action:'close',origin,session,cache_dir:tmp});
+    assert.equal(second.ok,true);assert.equal(second.result.logout_attempted,true);
+    assert.equal(second.result.logout_http_status,503);
+    await assert.rejects(()=>fs.stat(file),{code:'ENOENT'});
+    assert.ok(!commands.includes('Browser.close'));
+    // An already destroyed target/context is also a verified, idempotent cleanup.
+    await fs.writeFile(file,JSON.stringify(state));missingTarget=true;
+    const third=await main({action:'close',origin,session,cache_dir:tmp});
+    assert.equal(third.ok,true);assert.equal(third.result.logout_attempted,false);
   }finally{await fs.rm(tmp,{recursive:true,force:true});}
 });
 

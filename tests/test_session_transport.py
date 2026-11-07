@@ -62,6 +62,16 @@ class SessionTransportTests(unittest.TestCase):
         self.assertEqual(result['error']['code'], 'isolated_browser_requires_existing_node')
         run.assert_not_called()
 
+    def test_browser_close_needs_no_batch_and_does_not_run_business_or_updates(self):
+        argv=['paperflow.py','--browser-session','task','browser-close']
+        output=io.StringIO()
+        with patch.object(sys,'argv',argv),contextlib.redirect_stdout(output), \
+             patch('paperflow_browser.close_browser',return_value={'ok':True,'result':{'outcome':'browser_closed'}}) as close, \
+             patch.object(paperflow,'execute') as business,patch.object(paperflow.skill_update,'ensure') as update:
+            self.assertEqual(paperflow.main(),0)
+        close.assert_called_once();business.assert_not_called();update.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())['result']['outcome'],'browser_closed')
+
     def test_uncertain_execution_stops_once_and_requests_readback(self):
         with patch.object(paperflow_session.shutil, 'which', return_value='/existing/node'), \
              patch.object(paperflow_session.subprocess, 'run', side_effect=subprocess.TimeoutExpired('node', 10)) as run:

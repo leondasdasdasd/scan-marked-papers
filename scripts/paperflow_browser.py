@@ -72,3 +72,38 @@ def open_browser(args):
     return result(True,result={'outcome':'browser_opened','session':args.browser_session,
         'executable_source':source,**({'executable':executable} if executable else {}),
         'authentication_verified':False,'business_execution_verified':False,'submitted':False})
+
+
+def close_browser(args):
+    """Close only the caller-selected native session, without application logout."""
+    started=time.monotonic()
+    def result(ok,**fields):
+        return {'ok':ok,**fields,'wall_seconds':round(time.monotonic()-started,3)}
+    if args.browser_backend!='playwright':
+        return result(False,error={'code':'playwright_backend_required'})
+    import paperflow_session
+    if paperflow_session.available(args):
+        return result(False,error={'code':'isolated_session_already_bound','next_action':'session-close'})
+    if args.playwright_cli:
+        node=shutil.which('node')
+        if not node or not args.playwright_cli.is_file():
+            return result(False,error={'code':'existing_playwright_cli_unavailable'})
+        command=[node,str(args.playwright_cli)]
+    else:
+        if not shutil.which(args.wrapper):
+            return result(False,error={'code':'playwright_wrapper_unavailable'})
+        command=[args.wrapper]
+    try:
+        proc=subprocess.run(command+['-s='+args.browser_session,'close'],
+            capture_output=True,text=True,timeout=args.timeout+15)
+    except subprocess.TimeoutExpired:
+        return result(False,error={'code':'browser_close_uncertain','retryable':False,
+            'next_action':'inspect_named_browser_session'})
+    except OSError:
+        return result(False,error={'code':'browser_backend_unavailable','retryable':False})
+    if proc.returncode:
+        return result(False,error={'code':'browser_close_failed','retryable':False,
+            'next_action':'inspect_named_browser_session'})
+    # No redirect URLs, cookies, page content, or raw CLI logs are returned.
+    return result(True,result={'outcome':'browser_closed','session':args.browser_session,
+        'application_logout_performed':False,'shared_runtime_stopped':False,'submitted':False})

@@ -370,6 +370,7 @@ def main():
     sub=parser.add_subparsers(dest='action',required=True)
     for name in ('inspect','check','diagnose','usage','access','relogin','roster'):sub.add_parser(name)
     p=sub.add_parser('browser-open');p.add_argument('--executable')
+    sub.add_parser('browser-close')
     p=sub.add_parser('session-connect')
     p.add_argument('--source-url');p.add_argument('--source-target')
     p.add_argument('--target-url');p.add_argument('--executable')
@@ -456,13 +457,13 @@ def main():
         args.batch_id=saved.get('batch_id') or ''
         if not isinstance(args.batch_id,str):parser.error('invalid checkpoint batch id')
     batch_optional=args.action in ('upload','classes','class-students','access','relogin','api-call','collect',
-                                  'session-connect','session-status','session-close','browser-open')
+                                  'session-connect','session-status','session-close','browser-open','browser-close')
     if not args.batch_id and not batch_optional:parser.error('batch-id or batch-url required')
     args.batch_id=args.batch_id or ''
     if args.action=='upload' and not args.checkpoint:parser.error('upload requires checkpoint')
     if not args.browser_session and not args.emit_script and args.action!='collect' and not (args.action=='review' and args.metadata):parser.error('browser-session required for browser backend')
     if args.emit_script and args.action in ('review','collect'):parser.error('emit-script requires a browser action')
-    if args.emit_script and args.action=='browser-open':parser.error('browser-open requires a native Playwright backend')
+    if args.emit_script and args.action in ('browser-open','browser-close'):parser.error(args.action+' requires a native Playwright backend')
     url=urlsplit(args.base_url)
     if url.scheme not in ('http','https') or not url.netloc or url.path or url.username or url.password or url.query or url.fragment:
         parser.error('base-url must be an origin')
@@ -478,7 +479,7 @@ def main():
         try:validate_file_paths(args,[path for path in (engine_file,poll_file) if path is not None])
         except (OSError,ValueError) as exc:
             print(json.dumps(local_error(exc),ensure_ascii=False));return 1
-    if __name__=='__main__' and args.action not in ('api-list','collect','session-status','session-close') and not (args.action=='review' and args.metadata):
+    if __name__=='__main__' and args.action not in ('api-list','collect','session-status','session-close','browser-close') and not (args.action=='review' and args.metadata):
         try:updated=skill_update.ensure(ROOT.parent)
         except Exception:updated={'outcome':'update_failed','error':'update_check_unavailable','updated':False}
         if updated.get('updated'):
@@ -491,9 +492,9 @@ def main():
         result=paperflow_session.invoke(args,args.action.removeprefix('session-'))
         if args.output:atomic_json(args.output,result)
         print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
-    if args.action=='browser-open':
-        from paperflow_browser import open_browser
-        result=open_browser(args)
+    if args.action in ('browser-open','browser-close'):
+        from paperflow_browser import open_browser,close_browser
+        result=(open_browser if args.action=='browser-open' else close_browser)(args)
         if args.output:atomic_json(args.output,result)
         print(json.dumps(result,ensure_ascii=False));return 0 if result.get('ok') else 1
     try:
