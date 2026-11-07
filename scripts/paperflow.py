@@ -30,12 +30,13 @@ def atomic_json(path,data):
 
 
 
-def validate_file_paths(args,generated_outputs=()):
+def validate_file_paths(args,generated_outputs=(),protected_inputs=()):
     """Reject aliases before any output, checkpoint or update can overwrite input."""
-    inputs=('plan','edits','scope_plan','metadata','result','file','pdf','review_pdf')
+    inputs=('plan','edits','scope_plan','metadata','pixel_review','result','file','pdf','review_pdf')
     outputs=('output','checkpoint','snapshot_output','emit_script')
     paths=[(name,Path(value),name in outputs) for name in (*inputs,*outputs)
            if (value:=getattr(args,name,None)) is not None]
+    paths.extend(('protected_input',Path(value),False) for value in protected_inputs)
     generated=[('generated',Path(value),True) for value in generated_outputs]
     paths.extend(generated)
     # atomic_json also writes a temporary sibling before replacing its target.
@@ -57,6 +58,7 @@ def validate_frame_plan(action,plan):
         if plan is None:return
     elif action!='frames':return
     if not isinstance(plan,dict):raise ValueError('edit_plan_required')
+    if plan.get('coordinate_space') is not None:raise ValueError('pixel_review_required')
     operations=plan.get('operations')
     if not isinstance(operations,list):raise ValueError('empty_edit_plan')
     def frame_id(value):
@@ -376,7 +378,9 @@ def main():
     for name in ('classes','class-students'):
         p=sub.add_parser(name);p.add_argument('--source',choices=('teaching','general'),default='teaching')
         p.add_argument('--grade');p.add_argument('--subject-id');p.add_argument('--course-id')
-        if name=='class-students':p.add_argument('--class-id',required=True)
+        if name=='class-students':
+            p.add_argument('--class-id',required=True,action='append')
+            p.add_argument('--name-exact',action='append')
     p=sub.add_parser('prepare');p.add_argument('--file',type=Path,required=True);p.add_argument('--pages-per-paper',type=int)
     p.add_argument('--read-timeout',type=float,default=10)
     p=sub.add_parser('doctor');p.add_argument('--read-timeout',type=float,default=10)
@@ -395,6 +399,7 @@ def main():
     p.add_argument('--follow',action='store_true');p.add_argument('--max-seconds',type=int,default=600)
     p=sub.add_parser('snapshot');p.add_argument('--output',type=Path,dest='snapshot_output')
     p=sub.add_parser('frames');p.add_argument('--edits',type=Path,required=True);p.add_argument('--confirm',action='store_true')
+    p.add_argument('--pixel-review',type=Path)
     p=sub.add_parser('associate');p.add_argument('--plan',type=Path,required=True)
     p=sub.add_parser('review');p.add_argument('--pdf',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
     p.add_argument('--metadata',type=Path)
@@ -491,6 +496,10 @@ def main():
         plan_path=getattr(args,'plan',None) or getattr(args,'edits',None)
         if plan_path and not plan_path.is_file():raise ValueError('plan_file_not_found')
         plan=json.loads(plan_path.read_text()) if plan_path else None
+        if args.action=='frames' and args.pixel_review:
+            from paperflow_coordinates import normalize_pixel_plan
+            plan,images=normalize_pixel_plan(plan,args.pixel_review,args.batch_id)
+            validate_file_paths(args,protected_inputs=images)
         if args.action=='run' and args.reference_paper:
             if plan is not None and not isinstance(plan,dict):raise ValueError('invalid_run_plan')
             if plan and plan.get('reference_student_id') not in (None,args.reference_paper):
@@ -499,7 +508,9 @@ def main():
         if args.action=='api-call':plan={**(plan or {}),'operation':args.operation}
         if args.action in ('classes','class-students'):
             plan={k:getattr(args,k) for k in ('source','grade','subject_id','course_id') if getattr(args,k) is not None}
-            if args.action=='class-students':plan['class_id']=args.class_id
+            if args.action=='class-students':
+                if len(args.class_id)==1 and not args.name_exact:plan['class_id']=args.class_id[0]
+                else:plan.update(class_ids=args.class_id,name_exact=args.name_exact or [])
         if args.action=='upload':plan=upload.plan(args)
         if args.action=='retry-precut':plan={'page':args.page,'frame_revision':args.frame_revision}
         if args.action=='evidence':plan={'paper_id':args.paper_id,'question_ids':args.question_id}

@@ -488,6 +488,39 @@ test('deleted batch is distinct from unknown routes and missing scope does not c
  const d=await main(input('api-call',{plan:{operation:'grading-start',evidence_confirmed:true,evidence_note:'authorized original batch'}}));
  assert(!d.ok);assert.equal(d.error.code,'classroom_scope_required');assert.equal(d.error.next_action,'select_verified_classroom_scope');
  assert.equal(starts,1);assert(w.trace.every(([method])=>method==='GET'));
+ const fresh=world();fresh.batch.workflow_mode='grading';fresh.batch.grading_engine='xueersi';const liveFetch=global.fetch;let conflictingStarts=0;
+ global.fetch=async(path,o)=>{if(path===B+'/start'){conflictingStarts++;return reply({detail:'关联结果已更新，请刷新后重试'},409);}return liveFetch(path,o);};
+ const changed=await main(input('api-call',{plan:{operation:'grading-start',evidence_confirmed:true,evidence_note:'same authorized batch'}}));
+ assert.equal(changed.error.code,'grading_roster_changed');assert.equal(conflictingStarts,1);
+ assert.equal(changed.error.next_action,'read_live_state_and_roster_before_resuming');
+});
+test('exact-name lookup batches explicit permitted classes with bounded reads and never guesses an association',async()=>{
+ world();let active=0,maxActive=0;const calls=[];
+ global.fetch=async(path,o)=>{
+  calls.push([o.method,path]);active++;maxActive=Math.max(maxActive,active);
+  await new Promise(r=>setTimeout(r,2));active--;
+  const cid=path.match(/classes\/(\d+)\/students/)[1];
+  return reply({classroom:{id:cid},total:2,students:[{id:'private',name:'Unrelated private name'},
+    {id:cid,name:cid==='937'?'Clear Name':'Clear Name Variant'}]});
+ };
+ const plan={source:'general',grade:'6',subject_id:'14',course_id:'658',
+   class_ids:['934','935','936','937','938','939','940','941'],name_exact:['Clear Name','Absent Name']};
+ const d=await main(input('class-students',{plan}));assert(d.ok);assert.equal(d.result.lookup_complete,true);
+ assert.equal(maxActive,3);assert.equal(calls.length,8);assert(calls.every(([m])=>m==='GET'));
+ assert.deepEqual(d.result.matches,[{id:'937',name:'Clear Name',class_id:'937'}]);
+ assert.deepEqual(d.result.unmatched_names,['Absent Name']);assert.equal(d.result.association_performed,false);
+ assert(!JSON.stringify(d.result).includes('Unrelated private name'));assert(!JSON.stringify(d.result).includes('Name Variant'));
+ global.fetch=async(path,o)=>reply({detail:'forbidden'},403);
+ const partial=await main(input('class-students',{plan:{...plan,class_ids:['934']}}));
+ assert(partial.ok);assert.equal(partial.result.lookup_complete,false);assert.equal(partial.result.unmatched_names,null);
+ assert.equal(partial.result.classes[0].error.code,'permission_denied');
+ global.fetch=async()=>reply({total:2,students:[{id:'1',name:'Other'}]});
+ const truncated=await main(input('class-students',{plan:{...plan,class_ids:['934']}}));
+ assert.equal(truncated.result.lookup_complete,false);assert.equal(truncated.result.unmatched_names,null);
+ assert.equal(truncated.result.classes[0].error.code,'class_students_incomplete');
+ let unexpected=0;global.fetch=async()=>{unexpected++;return reply({},500);};
+ const invalid=await main(input('class-students',{plan:{...plan,class_ids:['934','934']}}));
+ assert.equal(invalid.error.code,'invalid_class_id');assert.equal(unexpected,0);
 });
 
 (async()=>{let failed=0;for(const[name,fn]of tests){try{await fn();console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+' '+e.message);}}console.log(JSON.stringify({tests:tests.length,passed:tests.length-failed,failed}));process.exitCode=failed?1:0;})();

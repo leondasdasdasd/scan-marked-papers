@@ -36,6 +36,7 @@ async (input) => {
       if(response.status===422&&message==='标准卷选择格式无效')code='invalid_json_body';
       if(response.status===404&&(path===B||path.startsWith(B+'/'))&&message==='考试不存在或已删除')code='batch_not_found';
       if(response.status===422&&method==='POST'&&path===B+'/start'&&message==='请先选择年级、学科、课程和班级')code='classroom_scope_required';
+      if(response.status===409&&method==='POST'&&path===B+'/start'&&message==='关联结果已更新，请刷新后重试')code='grading_roster_changed';
       if(method==='GET'&&path===B+'/analysis/status'&&response.status===503&&
         message==='分析状态正在更新，请稍后重试')code='analysis_status_updating';
       const classroomAuth=response.status===428&&(serverCode==='classroom_login_required'||serverCode==='GATEWAY_AUTHORIZATION'||
@@ -46,7 +47,7 @@ async (input) => {
         permission_denied:'verify_identity_scope',contract_mismatch:'verify_deployed_contract',
         rate_limited:'wait_before_reading_state',api_failed:'read_state_before_retry',
         analysis_status_updating:'wait_before_reading_state',batch_not_found:'verify_existing_batch_link',
-        classroom_scope_required:'select_verified_classroom_scope'};
+        classroom_scope_required:'select_verified_classroom_scope',grading_roster_changed:'read_live_state_and_roster_before_resuming'};
       fail(code,{status:response.status,method,path,retryable:false,next_action:next[code],
         ...(message?{message:message.slice(0,500)}:{}),
         ...(Array.isArray(detail)?{validation_errors:detail.slice(0,8).map(e=>({location:e.loc,type:e.type,message:String(e.msg||'').slice(0,300)}))}:{}),

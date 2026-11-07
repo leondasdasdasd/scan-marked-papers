@@ -32,6 +32,28 @@
         {next_action:'query_general_directory'}:{}),submitted:false};
   }
   async function classStudents(p){
+    if(p?.class_ids!==undefined){
+      const ids=p.class_ids,names=p.name_exact;
+      if(!Array.isArray(ids)||!ids.length||ids.length>50||new Set(ids).size!==ids.length||ids.some(id=>!/^\d{1,30}$/.test(id)))fail('invalid_class_id');
+      if(!Array.isArray(names)||!names.length||names.length>10||names.some(n=>typeof n!=='string'||!n.trim()||n.length>80))fail('exact_name_required');
+      const scope=scopeQuery(p),groups=new Array(ids.length),deadline=performance.now()+input.timeout*1000;let next=0;
+      await Promise.all(Array.from({length:Math.min(3,ids.length)},async()=>{
+        while(next<ids.length){const i=next++,class_id=ids[i];
+          if(performance.now()>=deadline){groups[i]={class_id,complete:false,error:{code:'lookup_budget_exhausted'}};continue;}
+          try{
+            const d=await api('GET',queryPath('/api/classroom/classes/'+class_id+'/students',scope,['source','grade','subject_id','course_id']));
+            if(!Array.isArray(d.students)||d.total!==undefined&&(!Number.isInteger(d.total)||d.total!==d.students.length))
+              fail('class_students_incomplete');
+            groups[i]={class_id,classroom:d.classroom,total:d.total??(d.students||[]).length,
+              matches:(d.students||[]).filter(s=>names.includes(s.name)).map(s=>({id:s.id,name:s.name})),complete:true};
+          }catch(e){groups[i]={class_id,complete:false,error:{code:e.code||'api_failed',status:e.details?.status||null}};}
+        }
+      }));
+      const complete=groups.every(g=>g.complete),matches=groups.flatMap(g=>(g.matches||[]).map(s=>({...s,class_id:g.class_id})));
+      return {outcome:'exact_name_directory_search',scope_query:scope,lookup_complete:complete,classes:groups,
+        matches,unmatched_names:complete?names.filter(n=>!matches.some(s=>s.name===n)):null,
+        association_performed:false,submitted:false};
+    }
     if(!/^\d{1,30}$/.test(p?.class_id||''))fail('invalid_class_id');
     const d=await api('GET',queryPath('/api/classroom/classes/'+p.class_id+'/students',scopeQuery(p),['source','grade','subject_id','course_id']));
     return {outcome:'class_students',...redact(d),submitted:false};

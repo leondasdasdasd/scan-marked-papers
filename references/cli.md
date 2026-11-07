@@ -164,7 +164,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 | `relogin` | 命令执行时启动平台既有强制登录导航，授权链接仅在浏览器内存中使用；emit 仅生成，evaluate 执行后才导航。导航已启动不等于恢复成功，之后须回原 origin 用 access 核验 |
 | `roster` | 一次读批次与名单，输出 revision、papers、linked/unlinked 及未关联卷的份号/PDF页码/姓名状态/原图定位；同名候选仅来自已有识别名，不提供剩余名单猜人；支持 emit |
 | `classes --source teaching或general [--grade <值> --subject-id <ID> --course-id <ID>]` | 读取当前允许教学/通用目录，按真实年级、学科、课程逐级选；不保存范围 |
-| `class-students --class-id <ID> [同scope查询参数]` | 只读预览当前目录允许班级的真实名单，不关联学生 |
+| `class-students --class-id <ID> [--class-id <ID>…] [--name-exact <清楚姓名>…] [同scope查询参数]` | 只读预览当前目录允许班级的真实名单，不关联学生 |
 | `scope --plan <JSON>` | 计划含当前roster revision、真实semester_id/class_ids/scope与证据，保存本批范围；不能录入后擅换班 |
 | `upload --file <PDF> --pages-per-paper <N> --key <固定键> --workflow scan或grading --engine llm或xueersi或doubao [其他模式/纸张参数]` | 同源FormData接口上传；三种业务模式，固定幂等键、超时查原上传；原生工具仅注入文件，不导出认证材料 |
 | `api-list [--operation <名称>]` | 离线列出受限registry的功能、路径、查询及必要字段，不访问业务服务 |
@@ -173,7 +173,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 | `run [--stop-after grading或check] [--reference-paper <已审卷ID>] [--plan <JSON文件>] [--review-pdf <PDF> --review-out <DIR>] [--follow --max-seconds 600]` | 按老师选择的终点和真实阶段推进；waiting 可有界等待，审图、目录校对、失败或终点返回。成对 review 参数复用当前读取生成校对包 |
 | `snapshot [--output <裸snapshot JSON>]` | 读批次/catalog，给源PDF SHA、read_version等版本、完整框与精简目录（正文、稳定选项ID、blank_ids、answers/extras）；reviewed=false不证明看过图 |
 | `review [--metadata <JSON>] --pdf <原PDF> --out <受控目录>` | 带 metadata 则复用已保存元数据离线渲染，不访问浏览器、不需会话；省略则从浏览器取 snapshot。核验 batch_id 和 PDF SHA，生成原页、按参考页每张最多6框/限高的上下文联系图、frame-index.json与review.json，需 pymupdf/Pillow；绑定来源与题框版本，始终reviewed=false |
-| `frames --edits <JSON> [--confirm]` | 本地整包校验 set/shift/split/promote_children，最多一次 PATCH，再按需确认；预切正常、题框非空且实际已审无修改时可 operations=[]，零 PATCH；失败/空框不能批准。保存与确认不是跨请求事务 |
+| `frames --edits <JSON> [--pixel-review <本CLI生成的review.json>] [--confirm]` | 本地整包校验 set/shift/split/promote_children，最多一次 PATCH，再按需确认；预切正常、题框非空且实际已审无修改时可 operations=[]，零 PATCH；失败/空框不能批准。保存与确认不是跨请求事务 |
 | `catalog --plan <JSON>` | 确认已审目录及本批处理范围，回读真实完整 questions，agent 不必复制富题对象；不修改目录，不提交课堂。run 根 plan.catalog 同效 |
 | `associate --plan <JSON>` | 整批证据/版本校验后顺序关联、采用新 roster revision，末尾回读；最多50项，可能部分保存，不是原子事务 |
 | `inspect` | 全批人数、叶题、作答、重复遗漏与未关联聚合；不是视觉验收 |
@@ -187,7 +187,7 @@ metadata 接受裸 snapshot、包含 result 的完整 envelope，或 run 的 res
 
 ## 目录、上传与文件注入
 
-先 access；课堂会话失效先完成一次 relogin 恢复并重新 access 验证，再用 classes 读取本次真实目录。复用已返回且符合本次选择的 source/course/semester 等精确参数，不重做无过滤查询、不猜 ID；teaching使用教学课程；返回 `next_action=query_general_directory` 时，按提示改查general，不再对同一空teaching源重试无过滤查询。general按grade、subject-id、course-id逐级读取。class-students使用同一组scope参数核对允许班级名单。多候选需用户决定时集中问业务选择，不让老师填写ID或工具参数。
+先 access；课堂会话失效先完成一次 relogin 恢复并重新 access 验证，再用 classes 读取本次真实目录。复用已返回且符合本次选择的 source/course/semester 等精确参数，不重做无过滤查询、不猜 ID；teaching使用教学课程；返回 `next_action=query_general_directory` 时，按提示改查general，不再对同一空teaching源重试无过滤查询。general按grade、subject-id、course-id逐级读取。class-students使用同一组scope参数核对允许班级名单。初次已清楚姓名需查其他明确允许班级时，一次用可重复--class-id与--name-exact精确查名，不逐班重复宿主调用；单班无姓名沿用完整名单，多班必须给姓名，上限50班/10名、并发最多3，沿本轮timeout到限不再派发，在途请求仍可能超出软预算。核对lookup_complete、每班complete/total及matches；任一失败或预算耗尽时lookup_complete=false、unmatched_names=null，不能当作查无此人。association_performed=false，不自动改scope或关联，不模糊匹配，也不为模糊姓名新增识别。多候选需用户决定时集中问业务选择，不让老师填写ID或工具参数。
 
 scope计划与run.scope结构相同：当前revision、semester_id、class_ids、scope对象及evidence_confirmed/evidence_note。scope.source为teaching或general；general还须真实grade/subject_id/course_id。现有批次先读roster取revision；新上传可给`--scope-plan <JSON>`，工具在创建或恢复原batch后读取它的当前revision再绑定，不把旧batch版本套到新记录。保存后回读名单与范围，录入后不擅换班。
 
@@ -261,6 +261,8 @@ python3 <技能目录>/scripts/paperflow.py --base-url <已核实origin> --check
 
 **题框。** 计划含 operation_id、当前 frame_revision/source_pdf_sha256/reference_student_id、`reference_reviewed=true`、`scope_reviewed=true`、reviewed_pages（覆盖全部 0-based 参考相对页）、operations，可含 expected_leaf_labels。内部帧 ID 使用 ASCII `[A-Za-z0-9_-]{1,100}`，中文题号放 label；regions 按实际原图给出有限、合法的归一化几何值。第一次保存前集中逐页逐框审清完整题干、全部选项、分数上下界、公共说明、作答空间与批注归属，不以统一 padding 代替边界判断。只有实际审过页和范围才填写确认标记；少量留白或不影响归属的个人框偏移不修。
 
+像素计划使用 `frames --edits <计划> --pixel-review <本CLI生成的review.json>`，计划必须声明 `coordinate_space:"pixels"`，region 的 page 仍为 0-based 相对页，bbox 为原始 PNG 像素 `[left,top,right,bottom]`；CLI核对同batch/source_pdf_sha256/frame_revision/reference_student_id及review.json记录的配对raw-page-N.png SHA，按PNG实际IHDR宽高转换为0..1。仅支持set/split/replace_page的regions，不支持shift/promote_children；不缩放、裁切、夹紧、识别题或自动padding/审阅。仍须实际严格审图并遵守全部本地及服务端保护；review与原图受防覆盖保护。普通归一化计划用法不变。
+
 operations 支持：
 
 - `set`：按 id 改 regions/label；`shift`：用 ids、归一化 dx/dy 移动。
@@ -312,6 +314,7 @@ checkpoint 保留目录确认中/已接受的有限回执。确认超时先只�
 | --- | --- |
 | `invalid_json_body` | 422 原文“标准卷选择格式无效”；先核对JSON传输/序列化，使用内置脚本，不猜键名。该路由 JSON 解析失败或 body 非对象才触发，ID不存在是另一条错误，不能据此断言平台故障 |
 | `validation_failed` | 按真实 detail 修正有证据的格式/字段，不盲试变体 |
+| `grading_roster_changed` | 仅POST本batch/start的409原文“关联结果已更新，请刷新后重试”对应此诊断；按next_action=read_live_state_and_roster_before_resuming只读live状态与roster，核实当前任务/范围后正常接续原batch，不自动重放、不换key或模型 |
 | `version_conflict` | 回读当前版本、范围和实际保存内容，再判断剩余动作 |
 | `classroom_login_required` | 先 access，再按诊断 relogin 一次；包括HTTP200业务体的已知428失效响应，其他428不推断为登录问题 |
 | `origin_mismatch` | 按expected_origin、actual_origin与next_action=verify_browser_origin_and_login核对当前页面及本次目标；两者仅为origin，不记录含query/token的完整URL。错源不等于账号失效，不自动导航；确需登录恢复时沿既有授权流程处理，回到目标origin后重新access核验 |
